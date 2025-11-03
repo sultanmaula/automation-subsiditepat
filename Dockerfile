@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1.6
+FROM composer:2 AS composer
+
 FROM php:8.3-fpm
 
 # 1) OS deps + build tools + libs utk ekstensi
@@ -16,6 +18,9 @@ RUN --mount=type=cache,target=/var/cache/apt \
       libgbm1 libpango-1.0-0 libcairo2 \
       fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+# Composer binary from official image
+COPY --from=composer /usr/bin/composer /usr/bin/composer
 
 # 2) Ekstensi: GD perlu flags; intl perlu libicu-dev; zip perlu libzip-dev
 RUN docker-php-ext-configure gd --with-jpeg --with-freetype \

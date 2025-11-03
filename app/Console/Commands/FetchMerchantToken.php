@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Symfony\Component\Process\Process;
+use App\Models\Account;
 
 class FetchMerchantToken extends Command
 {
@@ -28,8 +29,8 @@ class FetchMerchantToken extends Command
             'AUTH_EMAIL' => $email,
             'AUTH_PIN'   => $pin,
             'LOGIN_URL'  => env('MERCHANT_LOGIN_URL', 'https://subsiditepatlpg.mypertamina.id/merchant-login'),
-            'SEL_EMAIL'  => env('MERCHANT_SEL_EMAIL', 'input[name="email"], #email'),
-            'SEL_PIN'    => env('MERCHANT_SEL_PIN', 'input[name="pin"], #pin, input[type="password"]'),
+            'SEL_EMAIL'  => env('MERCHANT_SEL_EMAIL', 'input[placeholder="Masukkan Nomor Ponsel atau Email"]'),
+            'SEL_PIN'    => env('MERCHANT_SEL_PIN', 'input[placeholder="Masukkan nomor PIN Anda"]'),
             'SEL_SUBMIT' => env('MERCHANT_SEL_SUBMIT', 'button[type="submit"]'),
             'TOKEN_URL_HINT' => env('MERCHANT_TOKEN_URL_HINT', ''),
             'NODE_ENV'   => 'production',
@@ -44,6 +45,8 @@ class FetchMerchantToken extends Command
 
         if (!empty($data['token'])) {
             Cache::put('merchant_api_token_'.$email, $data['token'], now()->addMinutes(60));
+            Account::where('email', $email)->update(['last_update_api' => now()]);
+
             $this->info('Token saved to cache.');
             return Command::SUCCESS;
         }
