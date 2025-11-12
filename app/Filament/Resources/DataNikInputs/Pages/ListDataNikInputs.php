@@ -92,16 +92,26 @@ class ListDataNikInputs extends ListRecords
                     $updated = 0;
                     $rowsProcessed = 0;
                     $sequence = 0;
+                    $requiredColumns = ['nik', 'nama', 'alamat'];
 
                     try {
-                        DB::transaction(function () use ($handle, &$header, &$columnIndices, &$line, &$created, &$updated, &$rowsProcessed, &$sequence, $document): void {
+                        DB::transaction(function () use ($handle, &$header, &$columnIndices, &$line, &$created, &$updated, &$rowsProcessed, &$sequence, $document, $requiredColumns): void {
                             while (($row = fgetcsv($handle)) !== false) {
                                 $line++;
                                 $row = array_map(static fn ($value) => is_string($value) ? trim($value) : $value, $row);
+                                $hasContent = count(array_filter(
+                                    $row,
+                                    static fn ($value) => $value !== null && $value !== ''
+                                )) > 0;
+
+                                if (! $hasContent) {
+                                    continue;
+                                }
 
                                 if ($header === null) {
-                                    $header = array_map(
+                                    $normalizedHeader = array_map(
                                         static fn ($column) => Str::of($column)
+                                            ->replace("\xEF\xBB\xBF", '')
                                             ->lower()
                                             ->squish()
                                             ->replace([' ', '-'], '_')
@@ -110,28 +120,50 @@ class ListDataNikInputs extends ListRecords
                                         $row
                                     );
 
-                                    $requiredColumns = ['nik', 'nama', 'alamat'];
+                                    $columnIndices = [];
+                                    $missingColumns = [];
 
                                     foreach ($requiredColumns as $column) {
-                                        $index = array_search($column, $header, true);
+                                        $index = array_search($column, $normalizedHeader, true);
 
                                         if ($index === false) {
-                                            throw ValidationException::withMessages([
-                                                'csv_file' => 'CSV header must contain columns: NIK, Nama, dan Alamat.',
-                                            ]);
+                                            $missingColumns[] = $column;
+                                            continue;
                                         }
 
                                         $columnIndices[$column] = $index;
                                     }
 
-                                    continue;
+                                    if ($missingColumns === []) {
+                                        $header = $normalizedHeader;
+                                        continue;
+                                    }
+
+                                    $looksLikeDataRow = count($row) >= count($requiredColumns)
+                                        && isset($row[0])
+                                        && preg_match('/^\d{8,}$/', preg_replace('/\D/', '', (string) $row[0]));
+
+                                    if ($looksLikeDataRow) {
+                                        $header = $requiredColumns;
+                                        $columnIndices = array_flip($requiredColumns);
+                                    } else {
+                                        throw ValidationException::withMessages([
+                                            'csv_file' => 'CSV header must contain columns: NIK, Nama, dan Alamat.',
+                                        ]);
+                                    }
                                 }
 
-                                if (count(array_filter($row, static fn ($value) => $value !== null && $value !== '')) === 0) {
-                                    continue;
+                                if ($columnIndices === []) {
+                                    throw ValidationException::withMessages([
+                                        'csv_file' => 'CSV header must contain columns: NIK, Nama, dan Alamat.',
+                                    ]);
                                 }
 
-                                $nik = $row[$columnIndices['nik']] ?? null;
+                                $nikIndex = $columnIndices['nik'] ?? 0;
+                                $nameIndex = $columnIndices['nama'] ?? 1;
+                                $addressIndex = $columnIndices['alamat'] ?? 2;
+
+                                $nik = $row[$nikIndex] ?? null;
 
                                 if (! is_string($nik) || trim($nik) === '') {
                                     throw ValidationException::withMessages([
@@ -139,8 +171,8 @@ class ListDataNikInputs extends ListRecords
                                     ]);
                                 }
 
-                                $name = $row[$columnIndices['nama']] ?? null;
-                                $address = $row[$columnIndices['alamat']] ?? null;
+                                $name = $row[$nameIndex] ?? null;
+                                $address = $row[$addressIndex] ?? null;
 
                                 $sequence++;
 

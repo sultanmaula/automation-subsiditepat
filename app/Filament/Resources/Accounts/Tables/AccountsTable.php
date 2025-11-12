@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\Accounts\Tables;
 
-use App\Jobs\VerifyNikTransactionJob;
 use App\Models\Account;
 use App\Models\DataMasterDocument;
 use App\Models\DataNikInput;
@@ -15,6 +14,8 @@ use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Wizard\Step;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
@@ -145,21 +146,69 @@ class AccountsTable
                         ->color('success')
                         ->slideOver()
                         ->modalHeading('Input Data')
-                        ->form([
-                            Select::make('data_master_document_id')
-                                ->label('Pilih File')
-                                ->placeholder('Pilih dokumen')
-                                ->options(static fn (): array => DataMasterDocument::query()
-                                    ->orderBy('original_name')
-                                    ->pluck('original_name', 'id')
-                                    ->toArray())
-                                ->searchable()
-                                ->preload()
-                                ->required(),
-                            TextInput::make('last_nik_input')
-                                ->label('Last NIK Input')
-                                ->placeholder('-')
-                                ->disabled(),
+                        ->steps([
+                            Step::make('Select Mode')
+                                ->schema([
+                                    Select::make('input_mode')
+                                        ->label('Input Mode')
+                                        ->placeholder('-')
+                                        ->options([
+                                            'manual' => 'Upload Manual',
+                                            'document' => 'By Data Master Document',
+                                            'document_manual_nik' => 'By Document (Select NIK Manually)',
+                                        ])
+                                        ->required()
+                                        ->live(),
+                                ]),
+                            Step::make('Detail Input')
+                                ->schema([
+                                    TextInput::make('manual_nik')
+                                        ->label('NIK Manual')
+                                        ->placeholder('Enter NIK')
+                                        ->minLength(16)
+                                        ->maxLength(16)
+                                        ->visible(fn (Get $get): bool => $get('input_mode') === 'manual')
+                                        ->required(fn (Get $get): bool => $get('input_mode') === 'manual'),
+                                    Select::make('data_master_document_id')
+                                        ->label('Select File')
+                                        ->placeholder('-')
+                                        ->options(static fn (): array => DataMasterDocument::query()
+                                            ->orderBy('original_name')
+                                            ->pluck('original_name', 'id')
+                                            ->toArray())
+                                        ->searchable()
+                                        ->preload()
+                                        ->live()
+                                        ->visible(fn (Get $get): bool => in_array($get('input_mode'), ['document', 'document_manual_nik'], true))
+                                        ->required(fn (Get $get): bool => in_array($get('input_mode'), ['document', 'document_manual_nik'], true)),
+                                    Select::make('data_nik_input_id')
+                                        ->label('Select NIK (sort by order)')
+                                        ->placeholder('-')
+                                        ->options(function (Get $get): array {
+                                            $documentId = $get('data_master_document_id');
+
+                                            if (! $documentId) {
+                                                return [];
+                                            }
+
+                                            return DataNikInput::query()
+                                                ->where('data_master_document_id', $documentId)
+                                                ->orderBy('order')
+                                                ->get()
+                                                ->mapWithKeys(fn (DataNikInput $input) => [
+                                                    $input->id => sprintf('#%d - %s', $input->order, $input->nik),
+                                                ])
+                                                ->toArray();
+                                        })
+                                        ->searchable()
+                                        ->live()
+                                        ->visible(fn (Get $get): bool => $get('input_mode') === 'document_manual_nik')
+                                        ->required(fn (Get $get): bool => $get('input_mode') === 'document_manual_nik'),
+                                    TextInput::make('last_nik_input')
+                                        ->label('Last NIK Input')
+                                        ->placeholder('-')
+                                        ->disabled(),
+                                ]),
                         ])
                         ->beforeFormFilled(function (Action $action, Account $record): void {
                             $documentName = $record->dataNikInput?->document?->original_name;
@@ -171,19 +220,161 @@ class AccountsTable
                             ]);
                         })
                         ->action(function (Account $record, array $data): void {
-                            if ($data['data_master_document_id'] === $record->dataNikInput?->data_master_document_id) {
-                                // $niks = DataNikInput::where('order', '>', $record->dataNikInput?->order)->get()->pluck('nik');
-                                $niks = DataNikInput::where('order', '>', 293)->where('order', '<', 299)->get()->pluck('nik');
+                            $inputMode = $data['input_mode'] ?? null;
 
-                                foreach ($niks as $nik) {
-                                    VerifyNikTransactionJob::dispatch($record, $nik);
+                            if ($inputMode === 'manual') {
+                                $exitCode = Artisan::call('merchant:verify-nik', [
+                                    'account' => $record->email,
+                                    'nik' => $data['manual_nik'],
+                                ]);
+
+                                if ($exitCode !== Command::SUCCESS) {
+                                    $output = trim(Artisan::output());
+
+                                    Notification::make()
+                                        ->title('Gagal memproses NIK manual.')
+                                        ->body($output !== '' ? $output : null)
+                                        ->danger()
+                                        ->send();
+
+                                    return;
                                 }
-                            } else {
+
                                 Notification::make()
-                                    ->title('Error!')
+                                    ->title('Berhasil memproses NIK manual.')
+                                    ->success()
+                                    ->send();
+
+                                return;
+                            }
+
+                            if (! in_array($inputMode, ['document', 'document_manual_nik'], true)) {
+                                Notification::make()
+                                    ->title('Metode input belum dipilih.')
                                     ->danger()
                                     ->send();
+
+                                return;
                             }
+
+                            $documentId = $data['data_master_document_id'] ?? null;
+                            $isManualNikSelection = $inputMode === 'document_manual_nik';
+
+                            if (! $documentId) {
+                                Notification::make()
+                                    ->title('Silakan pilih dokumen terlebih dahulu.')
+                                    ->danger()
+                                    ->send();
+
+                                return;
+                            }
+
+                            $startingOrder = null;
+
+                            if ($isManualNikSelection) {
+                                $selectedNikId = $data['data_nik_input_id'] ?? null;
+
+                                if (! $selectedNikId) {
+                                    Notification::make()
+                                        ->title('Silakan pilih NIK yang ingin diproses.')
+                                        ->danger()
+                                        ->send();
+
+                                    return;
+                                }
+
+                                $selectedNik = DataNikInput::query()
+                                    ->whereKey($selectedNikId)
+                                    ->where('data_master_document_id', $documentId)
+                                    ->first();
+
+                                if (! $selectedNik) {
+                                    Notification::make()
+                                        ->title('Data NIK tidak ditemukan pada dokumen terpilih.')
+                                        ->danger()
+                                        ->send();
+
+                                    return;
+                                }
+
+                                $startingOrder = (int) $selectedNik->order;
+                            } else {
+                                $lastNikValue = $record->last_nik_input;
+
+                                if (! $lastNikValue) {
+                                    Notification::make()
+                                        ->title('Belum ada riwayat NIK terakhir untuk akun ini.')
+                                        ->body('Silakan pilih NIK secara manual.')
+                                        ->danger()
+                                        ->send();
+
+                                    return;
+                                }
+
+                                $lastNikRecord = DataNikInput::query()
+                                    ->where('data_master_document_id', $documentId)
+                                    ->where('nik', $lastNikValue)
+                                    ->first();
+
+                                if (! $lastNikRecord) {
+                                    Notification::make()
+                                        ->title('NIK terakhir tidak ditemukan pada dokumen ini.')
+                                        ->body('Silakan pilih NIK secara manual.')
+                                        ->danger()
+                                        ->send();
+
+                                    return;
+                                }
+
+                                $startingOrder = ((int) $lastNikRecord->order) + 1;
+                            }
+
+                            $niks = DataNikInput::query()
+                                ->where('data_master_document_id', $documentId)
+                                ->where('order', '>=', $startingOrder)
+                                ->orderBy('order')
+                                ->pluck('nik');
+
+                            if ($niks->isEmpty()) {
+                                Notification::make()
+                                    ->title('Tidak ada NIK yang bisa diproses.')
+                                    ->body($isManualNikSelection
+                                        ? 'Silakan pilih NIK lainnya.'
+                                        : 'Semua NIK pada dokumen ini telah diproses.')
+                                    ->warning()
+                                    ->send();
+
+                                return;
+                            }
+
+                            foreach ($niks as $nik) {
+                                $exitCode = Artisan::call('merchant:verify-nik', [
+                                    'account' => $record->email,
+                                    'nik' => $nik,
+                                ]);
+
+                                if ($exitCode !== Command::SUCCESS) {
+                                    $output = trim(Artisan::output());
+                                    $res = json_decode($output);
+                                    
+                                    if ($res && $res->code >= 400) {
+                                        continue;
+                                    }
+
+                                    Notification::make()
+                                        ->title("Gagal memproses NIK {$nik}")
+                                        ->body($output !== '' ? $output : null)
+                                        ->danger()
+                                        ->send();
+
+                                    return;
+                                }
+                            }
+
+                            Notification::make()
+                                ->title('Berhasil memproses data NIK terpilih.')
+                                ->success()
+                                ->send();
                         }),
                     ViewAction::make()
                         ->extraAttributes(['x-tooltip.raw' => 'View Account'])

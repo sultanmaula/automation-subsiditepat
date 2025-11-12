@@ -31,9 +31,12 @@ class FetchMerchantToken extends Command
             'LOGIN_URL'  => env('MERCHANT_LOGIN_URL', 'https://subsiditepatlpg.mypertamina.id/merchant-login'),
             'SEL_EMAIL'  => env('MERCHANT_SEL_EMAIL', 'input[placeholder="Masukkan Nomor Ponsel atau Email"]'),
             'SEL_PIN'    => env('MERCHANT_SEL_PIN', 'input[placeholder="Masukkan nomor PIN Anda"]'),
-            'SEL_SUBMIT' => env('MERCHANT_SEL_SUBMIT', 'button[type="submit"]'),
-            'TOKEN_URL_HINT' => env('MERCHANT_TOKEN_URL_HINT', ''),
+            'SEL_SUBMIT' => env('MERCHANT_SEL_SUBMIT', 'button[type="submit"]:has-text("MASUK")'),
+            'TOKEN_URL_HINT' => env('MERCHANT_TOKEN_URL_HINT', 'https://api-map.my-pertamina.id/general/products/v1/products/user'),
             'NODE_ENV'   => 'production',
+            'HOME' => env('PUPPETEER_HOME', '/var/www'),
+            'PUPPETEER_CACHE_DIR' => env('PUPPETEER_CACHE_DIR', base_path('.cache/puppeteer')),
+            'PUPPETEER_EXECUTABLE_PATH' => env('PUPPETEER_EXECUTABLE_PATH', '/usr/bin/chromium'),
         ];
 
         $process = new Process([$node, $script], base_path('scripts'), $env);
@@ -44,7 +47,7 @@ class FetchMerchantToken extends Command
         $data = json_decode(trim($out), true);
 
         if (!empty($data['token'])) {
-            Cache::put('merchant_api_token_'.$email, $data['token'], now()->addMinutes(60));
+            Cache::put('merchant_api_token_'.$email, $data['token'], now()->addMinutes(10));
             Account::where('email', $email)->update(['last_update_api' => now()]);
 
             $this->info('Token saved to cache.');

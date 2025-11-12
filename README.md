@@ -65,4 +65,8 @@ Jangan lupa run ``` npm install ``` di direktori /script dan juga jalankan ini s
 ```bash
 mkdir -p /var/www/.config
 chown -R www-data:www-data /var/www/.config
+
+docker compose exec app bash -lc 'mkdir -p /var/www/.npm && chown -R www-data:www-data /var/www/.npm'
+docker compose exec --user www-data app npx puppeteer browsers install chrome
+docker compose exec app bash -lc 'mkdir -p .cache/puppeteer && chmod -R 775 .cache/puppeteer'
 ```

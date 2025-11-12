@@ -4,6 +4,69 @@ const puppeteer = require('puppeteer');
 
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
+function buildSubmitTextHints(selector) {
+  const hints = [];
+  const explicit = (process.env.SEL_SUBMIT_TEXT || '').trim();
+  if (explicit) hints.push(explicit);
+  if (selector) {
+    const match = selector.match(/["'`](.+?)["'`]/);
+    if (match && match[1]) hints.push(match[1].trim());
+  }
+  hints.push('MASUK', 'LOGIN', 'SUBMIT');
+  return Array.from(new Set(hints.filter(Boolean)));
+}
+
+async function clickSubmitButton(page, selector, debug = false) {
+  if (selector) {
+    try {
+      const clicked = await page.evaluate((sel) => {
+        try {
+          const el = document.querySelector(sel);
+          if (!el) return false;
+          if (el && typeof el.focus === 'function') el.focus();
+          el.click();
+          return true;
+        } catch (err) {
+          return false;
+        }
+      }, selector);
+      if (clicked) return true;
+    } catch (err) {
+      if (debug) console.error(`[WARN] submit selector failed: ${err.message}`);
+    }
+  }
+
+  const hints = buildSubmitTextHints(selector);
+  for (const hint of hints) {
+    const upper = hint.toUpperCase().replace(/"/g, '\\"');
+    try {
+      const [btn] = await page.$x(`//button[contains(translate(normalize-space(.), 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), "${upper}")]`);
+      if (btn) {
+        await btn.click();
+        await btn.dispose();
+        if (debug) console.error(`[DEBUG] clicked submit button via text hint "${hint}"`);
+        return true;
+      }
+    } catch (err) {
+      if (debug) console.error(`[WARN] submit text hint "${hint}" failed: ${err.message}`);
+    }
+  }
+
+  try {
+    const fallbackBtn = await page.$('button[type="submit"], button[name="submit"]');
+    if (fallbackBtn) {
+      await fallbackBtn.click();
+      await fallbackBtn.dispose();
+      if (debug) console.error('[DEBUG] clicked fallback submit button');
+      return true;
+    }
+  } catch (err) {
+    if (debug) console.error(`[WARN] fallback submit click failed: ${err.message}`);
+  }
+
+  return false;
+}
+
 (async () => {
   const EMAIL = process.env.AUTH_EMAIL || '';
   const PIN   = process.env.AUTH_PIN   || '';
@@ -14,7 +77,9 @@ function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
   const SEL_SUBMIT = process.env.SEL_SUBMIT || 'button[type="submit"]';
 
   // request yg harus kita intip
+  // Accept both PROFILE_URL_HINT (old) and TOKEN_URL_HINT (new) env names.
   const PROFILE_URL_HINT = process.env.PROFILE_URL_HINT
+    || process.env.TOKEN_URL_HINT
     || 'api-map.my-pertamina.id/general/v1/users/profile';
 
   const DEBUG    = (process.env.DEBUG === '1' || process.env.DEBUG === 'true');
@@ -130,21 +195,36 @@ function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
       }
     }
 
-    await page.click(SEL_SUBMIT).catch(()=>{});
+    const submitClicked = await clickSubmitButton(page, SEL_SUBMIT, DEBUG);
+    if (!submitClicked) {
+      if (DEBUG) console.error('[WARN] falling back to pressing Enter for submit');
+      await page.keyboard.press('Enter').catch(()=>{});
+    }
+
+    try {
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 });
+    } catch (_) {
+      await sleep(4000);
+    }
 
     // 4) Tunggu request profile (yang seharusnya bawa Authorization)
     // kasih waktu cukup lama karena SPA bisa lazy-load
     try {
       await page.waitForRequest(r => r.url().includes(PROFILE_URL_HINT), { timeout: 45000 });
-    } catch (_) {}
+    } catch (_) {
+      if (DEBUG) console.error('[WARN] waitForRequest timed out');
+    }
 
     // 5) Fallback: baca token yang tertangkap dari hook fetch/XHR
     if (!foundToken) {
       const auths = await page.evaluate(() => Array.isArray(window.__authTokens) ? window.__authTokens : []);
       if (DEBUG) console.error(`[HOOKED_AUTH] ${JSON.stringify(auths)}`);
-      const bearer = (auths || []).find(a => /^Bearer\s+/i.test(a));
-      if (bearer) {
-        foundToken = bearer.replace(/^Bearer\s+/i, '').trim();
+      const cleaned = (auths || []).map(String);
+      const rawToken =
+        cleaned.find(a => /^Bearer\s+/i.test(a)) ||
+        cleaned.find(a => /eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/.test(a));
+      if (rawToken) {
+        foundToken = rawToken.replace(/^Bearer\s+/i, '').trim();
         if (foundToken) {
           console.log(JSON.stringify({ token: foundToken }));
           try { await browser.close(); } catch {}
@@ -180,7 +260,28 @@ function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
       }
     }
 
-    // 7) Opsi debug: screenshot terakhir
+    // 7) Fallback: cek cookies untuk pola JWT
+    if (!foundToken) {
+      try {
+        const cookies = await page.cookies();
+        const fromCookies = (cookies || [])
+          .map(c => c.value)
+          .filter(Boolean)
+          .find(v => /eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/.test(String(v)));
+        if (fromCookies) {
+          const normalized = String(fromCookies).replace(/^Bearer\s+/i, '').trim();
+          if (normalized) {
+            console.log(JSON.stringify({ token: normalized }));
+            try { await browser.close(); } catch {}
+            process.exit(0);
+          }
+        }
+      } catch (err) {
+        if (DEBUG) console.error(`[WARN] reading cookies failed: ${err.message}`);
+      }
+    }
+
+    // 8) Opsi debug: screenshot terakhir
     if (DEBUG) {
       try { await page.screenshot({ path: '/var/www/html/scripts/debug.png', fullPage: true }); } catch {}
     }
