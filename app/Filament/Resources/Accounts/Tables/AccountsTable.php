@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Accounts\Tables;
 
+use App\Jobs\VerifyNikTransactionJob;
 use App\Models\Account;
 use App\Models\DataMasterDocument;
 use App\Models\DataNikInput;
@@ -14,6 +15,7 @@ use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\ViewField;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Wizard\Step;
 use Filament\Notifications\Notification;
@@ -23,6 +25,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Throwable;
 
 class AccountsTable
 {
@@ -149,6 +152,8 @@ class AccountsTable
                         ->steps([
                             Step::make('Select Mode')
                                 ->schema([
+                                    ViewField::make('job_loading_indicator')
+                                        ->view('filament.components.job-loading-indicator'),
                                     Select::make('input_mode')
                                         ->label('Input Mode')
                                         ->placeholder('-')
@@ -223,17 +228,14 @@ class AccountsTable
                             $inputMode = $data['input_mode'] ?? null;
 
                             if ($inputMode === 'manual') {
-                                $exitCode = Artisan::call('merchant:verify-nik', [
-                                    'account' => $record->email,
-                                    'nik' => $data['manual_nik'],
-                                ]);
-
-                                if ($exitCode !== Command::SUCCESS) {
-                                    $output = trim(Artisan::output());
+                                try {
+                                    VerifyNikTransactionJob::dispatchSync($record, $data['manual_nik']);
+                                } catch (Throwable $exception) {
+                                    $message = json_decode(trim($exception->getMessage()));
 
                                     Notification::make()
                                         ->title('Gagal memproses NIK manual.')
-                                        ->body($output !== '' ? $output : null)
+                                        ->body($message !== '' ? $message->message : null)
                                         ->danger()
                                         ->send();
 
@@ -348,22 +350,19 @@ class AccountsTable
                             }
 
                             foreach ($niks as $nik) {
-                                $exitCode = Artisan::call('merchant:verify-nik', [
-                                    'account' => $record->email,
-                                    'nik' => $nik,
-                                ]);
+                                try {
+                                    VerifyNikTransactionJob::dispatchSync($record, $nik);
+                                } catch (Throwable $exception) {
+                                    $message = trim($exception->getMessage());
+                                    $decoded = json_decode($message);
 
-                                if ($exitCode !== Command::SUCCESS) {
-                                    $output = trim(Artisan::output());
-                                    $res = json_decode($output);
-                                    
-                                    if ($res && $res->code >= 400) {
+                                    if ($decoded && ($decoded->code ?? 0) >= 400) {
                                         continue;
                                     }
 
                                     Notification::make()
                                         ->title("Gagal memproses NIK {$nik}")
-                                        ->body($output !== '' ? $output : null)
+                                        ->body($message !== '' ? $message : null)
                                         ->danger()
                                         ->send();
 
