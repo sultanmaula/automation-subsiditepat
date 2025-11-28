@@ -13,6 +13,8 @@ use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
+use Filament\Forms\Components\DatePicker;
+use Filament\Schemas\Components\Grid;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\ViewField;
@@ -22,6 +24,7 @@ use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Console\Command;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -41,7 +44,7 @@ class AccountsTable
                     ->placeholder('-')
                     ->dateTime(),
                 TextColumn::make('bearer_token_status')
-                    ->label('Bearer Token Status')
+                    ->label  ('Bearer Token Status')
                     ->state(fn (Account $record): string => Cache::has("merchant_api_token_{$record->email}") ? 'Valid' : 'Expired')
                     ->badge()
                     ->color(fn (string $state): string => $state === 'Valid' ? 'success' : 'danger'),
@@ -87,6 +90,93 @@ class AccountsTable
                     //                 ->send();
                     //         }
                     //     }),
+                    Action::make('salesReport')
+                        ->label('Rekap Penjualan')
+                        ->icon('heroicon-s-chart-bar')
+                        ->hiddenLabel()
+                        ->extraAttributes(['x-tooltip.raw' => 'Rekap Penjualan'])
+                        ->color('info')
+                        ->modalHeading('Rekap Penjualan')
+                        ->modalWidth('4xl')
+                        ->modalSubmitActionLabel('Tampilkan Rekap')
+                        ->beforeFormFilled(function (Action $action, Account $record): void {
+                            $start = now()->startOfDay();
+                            $end = now()->endOfDay();
+
+                            if (! self::loadSalesReport($action, $record, $start, $end)) {
+                                $action->cancel();
+                            }
+                        })
+                        ->form([
+                            Grid::make(2)
+                                ->schema([
+                                    DatePicker::make('report_start_date')
+                                        ->label('Tanggal Mulai')
+                                        ->default(fn (): string => now()->toDateString())
+                                        ->maxDate(fn (Get $get): ?string => $get('report_end_date'))
+                                        ->required(),
+                                    DatePicker::make('report_end_date')
+                                        ->label('Tanggal Selesai')
+                                        ->default(fn (): string => now()->toDateString())
+                                        ->minDate(fn (Get $get): ?string => $get('report_start_date'))
+                                        ->required(),
+                                ]),
+                            ViewField::make('report_summary')
+                                ->view('filament.components.sales-report-summary')
+                                ->viewData(fn (Get $get, $state): array => [
+                                    'summary' => $state ?? [],
+                                    'dateRange' => [
+                                        'start' => $get('report_start_date'),
+                                        'end' => $get('report_end_date'),
+                                    ],
+                                ])
+                                ->columnSpanFull()
+                                ->dehydrated(false),
+                            ViewField::make('report_customers')
+                                ->view('filament.components.sales-report-customers')
+                                ->viewData(fn ($state): array => [
+                                    'customers' => $state ?? [],
+                                ])
+                                ->columnSpanFull()
+                                ->dehydrated(false),
+                        ])
+                        ->action(function (Action $action, Account $record, array $data): void {
+                            $startDate = $data['report_start_date'] ?? null;
+                            $endDate = $data['report_end_date'] ?? null;
+
+                            if (! $startDate || ! $endDate) {
+                                Notification::make()
+                                    ->title('Silakan pilih rentang tanggal terlebih dahulu.')
+                                    ->warning()
+                                    ->send();
+
+                                $action->halt();
+
+                                return;
+                            }
+
+                            $start = Carbon::parse($startDate)->startOfDay();
+                            $end = Carbon::parse($endDate)->endOfDay();
+
+                            if ($start->greaterThan($end)) {
+                                Notification::make()
+                                    ->title('Tanggal mulai tidak boleh lebih besar dari tanggal selesai.')
+                                    ->danger()
+                                    ->send();
+
+                                $action->halt();
+
+                                return;
+                            }
+
+                            if (! self::loadSalesReport($action, $record, $start, $end, true)) {
+                                $action->halt();
+
+                                return;
+                            }
+
+                            $action->halt();
+                        }),
                     Action::make('infoAccount')
                         ->label('Info Account')
                         ->icon('heroicon-s-information-circle')
@@ -111,7 +201,7 @@ class AccountsTable
                                 ->disabled(),
                         ])
                         ->beforeFormFilled(function (Action $action, Account $record): void {
-                            if (!Cache::get("merchant_api_token_{$record->email}"))
+                            if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL)
                                 Artisan::call('merchant:fetch-token', [
                                     '--email' => $record->email,
                                     '--pin'   => $record->pin,
@@ -228,14 +318,27 @@ class AccountsTable
                             $inputMode = $data['input_mode'] ?? null;
 
                             if ($inputMode === 'manual') {
-                                try {
-                                    VerifyNikTransactionJob::dispatchSync($record, $data['manual_nik']);
-                                } catch (Throwable $exception) {
-                                    $message = json_decode(trim($exception->getMessage()));
+                                $exitCode = Artisan::call('merchant:verify-nik', [
+                                    'account' => $record->email,
+                                    'nik'     => $data['manual_nik'],
+                                ]);
+
+                                if ($exitCode !== Command::SUCCESS) {
+                                    $output = trim(Artisan::output());
+                                    $message = json_decode($output);
+                                    
+                                    if ($message->message === 'Transaksi melebihi stok yang dapat dijual' && $message->code === 400) {
+                                        Notification::make()
+                                            ->title('Stok hari ini sudah ter-input semua.')
+                                            ->success()
+                                            ->send();
+
+                                        return;
+                                    }
 
                                     Notification::make()
                                         ->title('Gagal memproses NIK manual.')
-                                        ->body($message !== '' ? $message->message : null)
+                                        ->body($message ? ($message->message ?? $output) : $output)
                                         ->danger()
                                         ->send();
 
@@ -350,24 +453,38 @@ class AccountsTable
                             }
 
                             foreach ($niks as $nik) {
-                                try {
-                                    VerifyNikTransactionJob::dispatchSync($record, $nik);
-                                } catch (Throwable $exception) {
-                                    $message = trim($exception->getMessage());
-                                    $decoded = json_decode($message);
+                                $exitCode = Artisan::call('merchant:verify-nik', [
+                                    'account' => $record->email,
+                                    'nik'     => $nik,
+                                ]);
 
-                                    if ($decoded && ($decoded->code ?? 0) >= 400) {
+                                if ($exitCode !== Command::SUCCESS) {
+                                    $output = trim(Artisan::output());
+                                    $decoded = json_decode($output);
+                                    
+                                    if ($decoded?->message === 'Transaksi melebihi stok yang dapat dijual' && $decoded?->code === 400) {
+                                        Notification::make()
+                                            ->title('Stok hari ini sudah ter-input semua.')
+                                            ->success()
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    if (\Str::startsWith($output, "Verify-NIK request failed") || ($decoded && ($decoded->code ?? 0) >= 400)) {
+                                        usleep(3000000);
                                         continue;
                                     }
 
                                     Notification::make()
                                         ->title("Gagal memproses NIK {$nik}")
-                                        ->body($message !== '' ? $message : null)
+                                        ->body($output !== '' ? $output : null)
                                         ->danger()
                                         ->send();
 
                                     return;
                                 }
+                                usleep(3000000);
                             }
 
                             Notification::make()
@@ -390,5 +507,108 @@ class AccountsTable
                     DeleteBulkAction::make(),
                 ]),
             ]);
+    }
+
+    protected static function loadSalesReport(Action $action, Account $record, Carbon $start, Carbon $end, bool $notifySuccess = false): bool
+    {
+        if (! Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL) {
+            Artisan::call('merchant:fetch-token', [
+                '--email' => $record->email,
+                '--pin' => $record->pin,
+            ]);
+        }
+
+        $token = Cache::get("merchant_api_token_{$record->email}");
+
+        if (! $token) {
+            Notification::make()
+                ->title('Bearer token tidak tersedia, silakan coba lagi.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $token,
+        ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', [
+            'startDate' => $start->toDateString(),
+            'endDate' => $end->toDateString(),
+        ]);
+
+        if ($response->status() === 401) {
+            Cache::forget("merchant_api_token_{$record->email}");
+
+            Notification::make()
+                ->title('Bearer token kedaluwarsa, silakan perbarui terlebih dahulu.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        if ($response->failed()) {
+            Notification::make()
+                ->title('Gagal mengambil rekap penjualan.')
+                ->body($response->json('message') ?? $response->body())
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $payload = $response->json();
+
+        if (($payload['code'] ?? null) !== 200 || ($payload['status'] ?? null) !== 'OK') {
+            Notification::make()
+                ->title('Rekap penjualan tidak tersedia.')
+                ->body($payload['message'] ?? 'Terjadi kesalahan saat membaca data.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $dataPayload = $payload['data'] ?? [];
+
+        $summaryReport = data_get($dataPayload, 'summaryReport', []);
+
+        $summary = [
+            'sold' => data_get($summaryReport, 'sold'),
+            'modal' => data_get($summaryReport, 'modal'),
+            'profit' => data_get($summaryReport, 'profit'),
+            'gross' => data_get($summaryReport, 'gross'),
+        ];
+
+        $customers = collect(data_get($dataPayload, 'customersReport', []))
+            ->map(fn ($customer) => [
+                'customer_report_id' => data_get($customer, 'customerReportId'),
+                'nationality_id' => data_get($customer, 'nationalityId'),
+                'name' => data_get($customer, 'name'),
+                'categories' => collect(data_get($customer, 'categories', []))
+                    ->map(fn ($category) => data_get($category, 'name') ?? (is_string($category) ? $category : null))
+                    ->filter()
+                    ->values()
+                    ->all(),
+                'total' => data_get($customer, 'total'),
+            ])
+            ->values()
+            ->all();
+
+        $action->fillForm([
+            'report_start_date' => $start->toDateString(),
+            'report_end_date' => $end->toDateString(),
+            'report_summary' => $summary,
+            'report_customers' => $customers,
+        ]);
+
+        if ($notifySuccess) {
+            Notification::make()
+                ->title('Rekap penjualan berhasil dimuat.')
+                ->success()
+                ->send();
+        }
+
+        return true;
     }
 }
