@@ -471,7 +471,7 @@ class AccountsTable
                                         return;
                                     }
 
-                                    if (\Str::startsWith($output, "Verify-NIK request failed") || ($decoded && ($decoded->code ?? 0) >= 400)) {
+                                    if (\Str::startsWith($output, "Verify-NIK request failed") || \Str::startsWith($output, "Invalid verify-nik response") || ($decoded && ($decoded?->code ?? 0) >= 400)) {
                                         usleep(3000000);
                                         continue;
                                     }
