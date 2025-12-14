@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\Account;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -22,6 +23,21 @@ class DatabaseSeeder extends Seeder
             'name' => 'Sultan Maula Chamzah',
             'email' => 'sultanmaulachamzah@gmail.com',
             'password' => Hash::make('Sult@n354'),
+        ]);
+
+        Account::create([
+            'email' => 'vauzismcg@gmail.com',
+            'pin' => '181818',
+        ]);
+
+        Account::create([
+            'email' => 'smcluluk@gmail.com',
+            'pin' => '181818',
+        ]);
+
+        Account::create([
+            'email' => 'nurulsmcg@gmail.com',
+            'pin' => '181818',
         ]);
     }
 }

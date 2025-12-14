@@ -14,7 +14,10 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\Placeholder;
+use Filament\Forms\Components\Repeater;
 use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Section;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\ViewField;
@@ -28,6 +31,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\HtmlString;
 use Throwable;
 
 class AccountsTable
@@ -44,15 +48,15 @@ class AccountsTable
                     ->placeholder('-')
                     ->dateTime(),
                 TextColumn::make('bearer_token_status')
-                    ->label  ('Bearer Token Status')
-                    ->state(fn (Account $record): string => Cache::has("merchant_api_token_{$record->email}") ? 'Valid' : 'Expired')
+                    ->label('Bearer Token Status')
+                    ->state(fn(Account $record): string => Cache::has("merchant_api_token_{$record->email}") ? 'Valid' : 'Expired')
                     ->badge()
-                    ->color(fn (string $state): string => $state === 'Valid' ? 'success' : 'danger'),
+                    ->color(fn(string $state): string => $state === 'Valid' ? 'success' : 'danger'),
                 TextColumn::make('dataNikInput.name')
                     ->label('Last Input')
                     ->placeholder('-')
-                    ->description(static fn (Account $record): ?string => $record->dataNikInput?->nik)
-                    ->description(static fn (Account $record): ?string => 'NIK: ' . $record->dataNikInput?->nik . ' | File: ' . $record->dataNikInput?->document?->original_name),
+                    ->description(static fn(Account $record): ?string => $record->dataNikInput?->nik)
+                    ->description(static fn(Account $record): ?string => 'NIK: ' . $record->dataNikInput?->nik . ' | File: ' . $record->dataNikInput?->document?->original_name),
             ])
             ->recordUrl(false)
             ->filters([
@@ -73,12 +77,12 @@ class AccountsTable
                     //             '--email' => $record->email,
                     //             '--pin'   => $record->pin,
                     //         ]);
-    
+
                     //         if ($exitCode === Command::SUCCESS) {
                     //             $record->update([
                     //                 'last_update_api' => now(),
                     //             ]);
-    
+
                     //             Notification::make()
                     //                 ->title('Bearer Token API successfully updated.')
                     //                 ->success()
@@ -98,60 +102,169 @@ class AccountsTable
                         ->color('info')
                         ->modalHeading('Rekap Penjualan')
                         ->modalWidth('4xl')
-                        ->modalSubmitActionLabel('Tampilkan Rekap')
-                        ->beforeFormFilled(function (Action $action, Account $record): void {
+                        ->modalCancelActionLabel('Tutup')
+                        ->mountUsing(function (Action $action, Account $record, $form): void {
                             $start = now()->startOfDay();
                             $end = now()->endOfDay();
 
-                            if (! self::loadSalesReport($action, $record, $start, $end)) {
-                                $action->cancel();
-                            }
+                            // Fetch initial data
+                            $data = self::fetchSalesReportData($record, $start, $end);
+
+                            // Fill form with initial data
+                            $form->fill([
+                                'report_start_date' => now()->toDateString(),
+                                'report_end_date' => now()->toDateString(),
+                                'summary_sold' => $data['summary']['sold'] ?? null,
+                                'summary_gross' => $data['summary']['gross'] ?? null,
+                                'summary_modal' => $data['summary']['modal'] ?? null,
+                                'summary_profit' => $data['summary']['profit'] ?? null,
+                                'report_customers' => $data['customers'] ?? [],
+                            ]);
                         })
                         ->form([
                             Grid::make(2)
                                 ->schema([
                                     DatePicker::make('report_start_date')
                                         ->label('Tanggal Mulai')
-                                        ->default(fn (): string => now()->toDateString())
-                                        ->maxDate(fn (Get $get): ?string => $get('report_end_date'))
-                                        ->required(),
+                                        ->default(fn(): string => now()->toDateString())
+                                        ->maxDate(fn(Get $get): ?string => $get('report_end_date'))
+                                        ->required()
+                                        ->live(),
                                     DatePicker::make('report_end_date')
                                         ->label('Tanggal Selesai')
-                                        ->default(fn (): string => now()->toDateString())
-                                        ->minDate(fn (Get $get): ?string => $get('report_start_date'))
-                                        ->required(),
+                                        ->default(fn(): string => now()->toDateString())
+                                        ->minDate(fn(Get $get): ?string => $get('report_start_date'))
+                                        ->required()
+                                        ->live(),
                                 ]),
-                            ViewField::make('report_summary')
-                                ->view('filament.components.sales-report-summary')
-                                ->viewData(fn (Get $get, $state): array => [
-                                    'summary' => $state ?? [],
-                                    'dateRange' => [
-                                        'start' => $get('report_start_date'),
-                                        'end' => $get('report_end_date'),
-                                    ],
-                                ])
-                                ->columnSpanFull()
-                                ->dehydrated(false),
-                            ViewField::make('report_customers')
-                                ->view('filament.components.sales-report-customers')
-                                ->viewData(fn ($state): array => [
-                                    'customers' => $state ?? [],
-                                ])
-                                ->columnSpanFull()
-                                ->dehydrated(false),
+
+                            // Hidden fields to store reactive data
+                            TextInput::make('summary_sold')->hidden()->live()->dehydrated(false),
+                            TextInput::make('summary_gross')->hidden()->live()->dehydrated(false),
+                            TextInput::make('summary_modal')->hidden()->live()->dehydrated(false),
+                            TextInput::make('summary_profit')->hidden()->live()->dehydrated(false),
+
+                            // Summary Section with Filament components
+                            Section::make('Ringkasan Penjualan')
+                                ->icon('heroicon-o-chart-bar')
+                                ->description(fn(Get $get): string => sprintf(
+                                    'Periode: %s — %s',
+                                    $get('report_start_date') ? Carbon::parse($get('report_start_date'))->format('d M Y') : '-',
+                                    $get('report_end_date') ? Carbon::parse($get('report_end_date'))->format('d M Y') : '-'
+                                ))
+                                ->collapsible()
+                                ->schema([
+                                    Grid::make(4)
+                                        ->schema([
+                                            Placeholder::make('card_sold')
+                                                ->label('')
+                                                ->live()
+                                                ->content(fn(Get $get): HtmlString => new HtmlString(
+                                                    self::renderStatCard(
+                                                        'Tabung Terjual',
+                                                        self::formatNumber($get('summary_sold')),
+                                                        'Unit terjual',
+                                                        'heroicon-o-cube',
+                                                        'emerald'
+                                                    )
+                                                )),
+                                            Placeholder::make('card_gross')
+                                                ->label('')
+                                                ->live()
+                                                ->content(fn(Get $get): HtmlString => new HtmlString(
+                                                    self::renderStatCard(
+                                                        'Omzet (Gross)',
+                                                        self::formatCurrency($get('summary_gross')),
+                                                        'Total pendapatan',
+                                                        'heroicon-o-banknotes',
+                                                        'blue'
+                                                    )
+                                                )),
+                                            Placeholder::make('card_modal')
+                                                ->label('')
+                                                ->live()
+                                                ->content(fn(Get $get): HtmlString => new HtmlString(
+                                                    self::renderStatCard(
+                                                        'Modal',
+                                                        self::formatCurrency($get('summary_modal')),
+                                                        'Total pengeluaran',
+                                                        'heroicon-o-credit-card',
+                                                        'amber'
+                                                    )
+                                                )),
+                                            Placeholder::make('card_profit')
+                                                ->label('')
+                                                ->live()
+                                                ->content(fn(Get $get): HtmlString => new HtmlString(
+                                                    self::renderStatCard(
+                                                        'Profit',
+                                                        self::formatCurrency($get('summary_profit')),
+                                                        'Keuntungan bersih',
+                                                        'heroicon-o-currency-dollar',
+                                                        'purple'
+                                                    )
+                                                )),
+                                        ]),
+                                ]),
+
+                            // Customers Section with Repeater
+                            Section::make(fn(Get $get): string => sprintf('Daftar Konsumen (%d)', count($get('report_customers') ?? [])))
+                                ->icon('heroicon-o-user-group')
+                                ->description('Detail transaksi per konsumen')
+                                ->collapsible()
+                                ->collapsed(fn(Get $get): bool => count($get('report_customers') ?? []) > 10)
+                                ->schema([
+                                    Repeater::make('report_customers')
+                                        ->label('')
+                                        ->schema([
+                                            Grid::make(4)
+                                                ->schema([
+                                                    Placeholder::make('customer_name')
+                                                        ->label('Nama')
+                                                        ->content(fn(Get $get): string => $get('name') ?? 'Tanpa Nama'),
+                                                    Placeholder::make('customer_nik')
+                                                        ->label('NIK')
+                                                        ->content(fn(Get $get): string => $get('nationality_id') ?? '-'),
+                                                    Placeholder::make('customer_total')
+                                                        ->label('Total Belanja')
+                                                        ->content(fn(Get $get): HtmlString => new HtmlString(
+                                                            '<span class="font-bold text-primary-600 dark:text-primary-400">' .
+                                                            self::formatCurrency($get('total')) .
+                                                            '</span>'
+                                                        )),
+                                                    Placeholder::make('customer_categories')
+                                                        ->label('Kategori')
+                                                        ->content(fn(Get $get): HtmlString => new HtmlString(
+                                                            self::renderCategories($get('categories') ?? [])
+                                                        )),
+                                                ]),
+                                        ])
+                                        ->deletable(false)
+                                        ->addable(false)
+                                        ->reorderable(false)
+                                        ->columns(1)
+                                        ->itemLabel(fn(array $state): string => sprintf(
+                                            '#%s - %s',
+                                            $state['customer_report_id'] ?? '-',
+                                            $state['name'] ?? 'Tanpa Nama'
+                                        ))
+                                        ->collapsed()
+                                        ->live()
+                                        ->dehydrated(false),
+                                ]),
                         ])
+                        ->modalSubmitActionLabel('Tampilkan Rekap')
                         ->action(function (Action $action, Account $record, array $data): void {
                             $startDate = $data['report_start_date'] ?? null;
                             $endDate = $data['report_end_date'] ?? null;
 
-                            if (! $startDate || ! $endDate) {
+                            if (!$startDate || !$endDate) {
                                 Notification::make()
                                     ->title('Silakan pilih rentang tanggal terlebih dahulu.')
                                     ->warning()
                                     ->send();
 
                                 $action->halt();
-
                                 return;
                             }
 
@@ -165,15 +278,27 @@ class AccountsTable
                                     ->send();
 
                                 $action->halt();
-
                                 return;
                             }
 
-                            if (! self::loadSalesReport($action, $record, $start, $end, true)) {
-                                $action->halt();
+                            // Fetch new data and push it back into the form state so the modal updates
+                            $reportData = self::fetchSalesReportData($record, $start, $end);
+                            
+                            $action->fillForm([
+                                'report_start_date' => $start->toDateString(),
+                                'report_end_date' => $end->toDateString(),
+                                'summary_sold' => $reportData['summary']['sold'] ?? null,
+                                'summary_gross' => $reportData['summary']['gross'] ?? null,
+                                'summary_modal' => $reportData['summary']['modal'] ?? null,
+                                'summary_profit' => $reportData['summary']['profit'] ?? null,
+                                'report_customers' => $reportData['customers'] ?? [],
+                            ]);
 
-                                return;
-                            }
+                            Notification::make()
+                                ->title('Rekap penjualan berhasil dimuat.')
+                                ->body(sprintf('Periode: %s - %s', $start->format('d M Y'), $end->format('d M Y')))
+                                ->success()
+                                ->send();
 
                             $action->halt();
                         }),
@@ -204,7 +329,7 @@ class AccountsTable
                             if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL)
                                 Artisan::call('merchant:fetch-token', [
                                     '--email' => $record->email,
-                                    '--pin'   => $record->pin,
+                                    '--pin' => $record->pin,
                                 ]);
 
                             $token = Cache::get("merchant_api_token_{$record->email}");
@@ -262,27 +387,27 @@ class AccountsTable
                                         ->placeholder('Enter NIK')
                                         ->minLength(16)
                                         ->maxLength(16)
-                                        ->visible(fn (Get $get): bool => $get('input_mode') === 'manual')
-                                        ->required(fn (Get $get): bool => $get('input_mode') === 'manual'),
+                                        ->visible(fn(Get $get): bool => $get('input_mode') === 'manual')
+                                        ->required(fn(Get $get): bool => $get('input_mode') === 'manual'),
                                     Select::make('data_master_document_id')
                                         ->label('Select File')
                                         ->placeholder('-')
-                                        ->options(static fn (): array => DataMasterDocument::query()
+                                        ->options(static fn(): array => DataMasterDocument::query()
                                             ->orderBy('original_name')
                                             ->pluck('original_name', 'id')
                                             ->toArray())
                                         ->searchable()
                                         ->preload()
                                         ->live()
-                                        ->visible(fn (Get $get): bool => in_array($get('input_mode'), ['document', 'document_manual_nik'], true))
-                                        ->required(fn (Get $get): bool => in_array($get('input_mode'), ['document', 'document_manual_nik'], true)),
+                                        ->visible(fn(Get $get): bool => in_array($get('input_mode'), ['document', 'document_manual_nik'], true))
+                                        ->required(fn(Get $get): bool => in_array($get('input_mode'), ['document', 'document_manual_nik'], true)),
                                     Select::make('data_nik_input_id')
                                         ->label('Select NIK (sort by order)')
                                         ->placeholder('-')
                                         ->options(function (Get $get): array {
                                             $documentId = $get('data_master_document_id');
 
-                                            if (! $documentId) {
+                                            if (!$documentId) {
                                                 return [];
                                             }
 
@@ -290,15 +415,15 @@ class AccountsTable
                                                 ->where('data_master_document_id', $documentId)
                                                 ->orderBy('order')
                                                 ->get()
-                                                ->mapWithKeys(fn (DataNikInput $input) => [
+                                                ->mapWithKeys(fn(DataNikInput $input) => [
                                                     $input->id => sprintf('#%d - %s', $input->order, $input->nik),
                                                 ])
                                                 ->toArray();
                                         })
                                         ->searchable()
                                         ->live()
-                                        ->visible(fn (Get $get): bool => $get('input_mode') === 'document_manual_nik')
-                                        ->required(fn (Get $get): bool => $get('input_mode') === 'document_manual_nik'),
+                                        ->visible(fn(Get $get): bool => $get('input_mode') === 'document_manual_nik')
+                                        ->required(fn(Get $get): bool => $get('input_mode') === 'document_manual_nik'),
                                     TextInput::make('last_nik_input')
                                         ->label('Last NIK Input')
                                         ->placeholder('-')
@@ -320,13 +445,13 @@ class AccountsTable
                             if ($inputMode === 'manual') {
                                 $exitCode = Artisan::call('merchant:verify-nik', [
                                     'account' => $record->email,
-                                    'nik'     => $data['manual_nik'],
+                                    'nik' => $data['manual_nik'],
                                 ]);
 
                                 if ($exitCode !== Command::SUCCESS) {
                                     $output = trim(Artisan::output());
                                     $message = json_decode($output);
-                                    
+
                                     if ($message->message === 'Transaksi melebihi stok yang dapat dijual' && $message->code === 400) {
                                         Notification::make()
                                             ->title('Stok hari ini sudah ter-input semua.')
@@ -353,7 +478,7 @@ class AccountsTable
                                 return;
                             }
 
-                            if (! in_array($inputMode, ['document', 'document_manual_nik'], true)) {
+                            if (!in_array($inputMode, ['document', 'document_manual_nik'], true)) {
                                 Notification::make()
                                     ->title('Metode input belum dipilih.')
                                     ->danger()
@@ -365,7 +490,7 @@ class AccountsTable
                             $documentId = $data['data_master_document_id'] ?? null;
                             $isManualNikSelection = $inputMode === 'document_manual_nik';
 
-                            if (! $documentId) {
+                            if (!$documentId) {
                                 Notification::make()
                                     ->title('Silakan pilih dokumen terlebih dahulu.')
                                     ->danger()
@@ -379,7 +504,7 @@ class AccountsTable
                             if ($isManualNikSelection) {
                                 $selectedNikId = $data['data_nik_input_id'] ?? null;
 
-                                if (! $selectedNikId) {
+                                if (!$selectedNikId) {
                                     Notification::make()
                                         ->title('Silakan pilih NIK yang ingin diproses.')
                                         ->danger()
@@ -393,7 +518,7 @@ class AccountsTable
                                     ->where('data_master_document_id', $documentId)
                                     ->first();
 
-                                if (! $selectedNik) {
+                                if (!$selectedNik) {
                                     Notification::make()
                                         ->title('Data NIK tidak ditemukan pada dokumen terpilih.')
                                         ->danger()
@@ -406,7 +531,7 @@ class AccountsTable
                             } else {
                                 $lastNikValue = $record->last_nik_input;
 
-                                if (! $lastNikValue) {
+                                if (!$lastNikValue) {
                                     Notification::make()
                                         ->title('Belum ada riwayat NIK terakhir untuk akun ini.')
                                         ->body('Silakan pilih NIK secara manual.')
@@ -421,7 +546,7 @@ class AccountsTable
                                     ->where('nik', $lastNikValue)
                                     ->first();
 
-                                if (! $lastNikRecord) {
+                                if (!$lastNikRecord) {
                                     Notification::make()
                                         ->title('NIK terakhir tidak ditemukan pada dokumen ini.')
                                         ->body('Silakan pilih NIK secara manual.')
@@ -455,13 +580,13 @@ class AccountsTable
                             foreach ($niks as $nik) {
                                 $exitCode = Artisan::call('merchant:verify-nik', [
                                     'account' => $record->email,
-                                    'nik'     => $nik,
+                                    'nik' => $nik,
                                 ]);
 
                                 if ($exitCode !== Command::SUCCESS) {
                                     $output = trim(Artisan::output());
                                     $decoded = json_decode($output);
-                                    
+
                                     if ($decoded?->message === 'Transaksi melebihi stok yang dapat dijual' && $decoded?->code === 400) {
                                         Notification::make()
                                             ->title('Stok hari ini sudah ter-input semua.')
@@ -500,7 +625,7 @@ class AccountsTable
                         ->extraAttributes(['x-tooltip.raw' => 'Delete Account'])
                         ->hiddenLabel(),
                 ])
-                ->buttonGroup(),
+                    ->buttonGroup(),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
@@ -509,9 +634,9 @@ class AccountsTable
             ]);
     }
 
-    protected static function loadSalesReport(Action $action, Account $record, Carbon $start, Carbon $end, bool $notifySuccess = false): bool
+    protected static function fetchSalesReportData(Account $record, Carbon $start, Carbon $end): array
     {
-        if (! Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL) {
+        if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL) {
             Artisan::call('merchant:fetch-token', [
                 '--email' => $record->email,
                 '--pin' => $record->pin,
@@ -520,7 +645,73 @@ class AccountsTable
 
         $token = Cache::get("merchant_api_token_{$record->email}");
 
-        if (! $token) {
+        if (!$token) {
+            return ['summary' => [], 'customers' => []];
+        }
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $token,
+        ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', [
+                    'startDate' => $start->toDateString(),
+                    'endDate' => $end->toDateString(),
+                ]);
+
+        if ($response->status() === 401) {
+            Cache::forget("merchant_api_token_{$record->email}");
+            return ['summary' => [], 'customers' => []];
+        }
+
+        if ($response->failed()) {
+            return ['summary' => [], 'customers' => []];
+        }
+
+        $payload = $response->json();
+
+        if (($payload['code'] ?? null) !== 200 || ($payload['status'] ?? null) !== 'OK') {
+            return ['summary' => [], 'customers' => []];
+        }
+
+        $dataPayload = $payload['data'] ?? [];
+        $summaryReport = data_get($dataPayload, 'summaryReport', []);
+
+        $customers = collect(data_get($dataPayload, 'customersReport', []))
+            ->map(fn($customer) => [
+                'customer_report_id' => data_get($customer, 'customerReportId'),
+                'nationality_id' => data_get($customer, 'nationalityId'),
+                'name' => data_get($customer, 'name'),
+                'categories' => collect(data_get($customer, 'categories', []))
+                    ->map(fn($category) => data_get($category, 'name') ?? (is_string($category) ? $category : null))
+                    ->filter()
+                    ->values()
+                    ->all(),
+                'total' => data_get($customer, 'total'),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'summary' => [
+                'sold' => data_get($summaryReport, 'sold'),
+                'gross' => data_get($summaryReport, 'gross'),
+                'modal' => data_get($summaryReport, 'modal'),
+                'profit' => data_get($summaryReport, 'profit'),
+            ],
+            'customers' => $customers,
+        ];
+    }
+
+    protected static function loadSalesReport(Action $action, Account $record, Carbon $start, Carbon $end, bool $notifySuccess = false): bool
+    {
+        if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL) {
+            Artisan::call('merchant:fetch-token', [
+                '--email' => $record->email,
+                '--pin' => $record->pin,
+            ]);
+        }
+
+        $token = Cache::get("merchant_api_token_{$record->email}");
+
+        if (!$token) {
             Notification::make()
                 ->title('Bearer token tidak tersedia, silakan coba lagi.')
                 ->danger()
@@ -532,9 +723,9 @@ class AccountsTable
         $response = Http::withHeaders([
             'Authorization' => 'Bearer ' . $token,
         ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', [
-            'startDate' => $start->toDateString(),
-            'endDate' => $end->toDateString(),
-        ]);
+                    'startDate' => $start->toDateString(),
+                    'endDate' => $end->toDateString(),
+                ]);
 
         if ($response->status() === 401) {
             Cache::forget("merchant_api_token_{$record->email}");
@@ -573,20 +764,13 @@ class AccountsTable
 
         $summaryReport = data_get($dataPayload, 'summaryReport', []);
 
-        $summary = [
-            'sold' => data_get($summaryReport, 'sold'),
-            'modal' => data_get($summaryReport, 'modal'),
-            'profit' => data_get($summaryReport, 'profit'),
-            'gross' => data_get($summaryReport, 'gross'),
-        ];
-
         $customers = collect(data_get($dataPayload, 'customersReport', []))
-            ->map(fn ($customer) => [
+            ->map(fn($customer) => [
                 'customer_report_id' => data_get($customer, 'customerReportId'),
                 'nationality_id' => data_get($customer, 'nationalityId'),
                 'name' => data_get($customer, 'name'),
                 'categories' => collect(data_get($customer, 'categories', []))
-                    ->map(fn ($category) => data_get($category, 'name') ?? (is_string($category) ? $category : null))
+                    ->map(fn($category) => data_get($category, 'name') ?? (is_string($category) ? $category : null))
                     ->filter()
                     ->values()
                     ->all(),
@@ -598,7 +782,10 @@ class AccountsTable
         $action->fillForm([
             'report_start_date' => $start->toDateString(),
             'report_end_date' => $end->toDateString(),
-            'report_summary' => $summary,
+            'summary_sold' => data_get($summaryReport, 'sold'),
+            'summary_gross' => data_get($summaryReport, 'gross'),
+            'summary_modal' => data_get($summaryReport, 'modal'),
+            'summary_profit' => data_get($summaryReport, 'profit'),
             'report_customers' => $customers,
         ]);
 
@@ -610,5 +797,259 @@ class AccountsTable
         }
 
         return true;
+    }
+
+    protected static function loadSalesReportWithSet(Action $action, Account $record, Carbon $start, Carbon $end, \Filament\Schemas\Components\Utilities\Set $set): bool
+    {
+        if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL) {
+            Artisan::call('merchant:fetch-token', [
+                '--email' => $record->email,
+                '--pin' => $record->pin,
+            ]);
+        }
+
+        $token = Cache::get("merchant_api_token_{$record->email}");
+
+        if (!$token) {
+            Notification::make()
+                ->title('Bearer token tidak tersedia, silakan coba lagi.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $token,
+        ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', [
+                    'startDate' => $start->toDateString(),
+                    'endDate' => $end->toDateString(),
+                ]);
+
+        if ($response->status() === 401) {
+            Cache::forget("merchant_api_token_{$record->email}");
+
+            Notification::make()
+                ->title('Bearer token kedaluwarsa, silakan perbarui terlebih dahulu.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        if ($response->failed()) {
+            Notification::make()
+                ->title('Gagal mengambil rekap penjualan.')
+                ->body('Terjadi kesalahan saat menghubungi server.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $payload = $response->json();
+
+        if (($payload['code'] ?? null) !== 200 || ($payload['status'] ?? null) !== 'OK') {
+            Notification::make()
+                ->title('Rekap penjualan tidak tersedia.')
+                ->body($payload['message'] ?? 'Terjadi kesalahan saat membaca data.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $dataPayload = $payload['data'] ?? [];
+
+        $summaryReport = data_get($dataPayload, 'summaryReport', []);
+
+        $customers = collect(data_get($dataPayload, 'customersReport', []))
+            ->map(fn($customer) => [
+                'customer_report_id' => data_get($customer, 'customerReportId'),
+                'nationality_id' => data_get($customer, 'nationalityId'),
+                'name' => data_get($customer, 'name'),
+                'categories' => collect(data_get($customer, 'categories', []))
+                    ->map(fn($category) => data_get($category, 'name') ?? (is_string($category) ? $category : null))
+                    ->filter()
+                    ->values()
+                    ->all(),
+                'total' => data_get($customer, 'total'),
+            ])
+            ->values()
+            ->all();
+
+        // Use Set for reactive updates
+        $set('summary_sold', data_get($summaryReport, 'sold'));
+        $set('summary_gross', data_get($summaryReport, 'gross'));
+        $set('summary_modal', data_get($summaryReport, 'modal'));
+        $set('summary_profit', data_get($summaryReport, 'profit'));
+        $set('report_customers', $customers);
+
+        Notification::make()
+            ->title('Rekap penjualan berhasil dimuat.')
+            ->success()
+            ->send();
+
+        return true;
+    }
+
+    protected static function loadSalesReportDirect(Action $action, Account $record, Carbon $start, Carbon $end, $livewire): bool
+    {
+        if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL) {
+            Artisan::call('merchant:fetch-token', [
+                '--email' => $record->email,
+                '--pin' => $record->pin,
+            ]);
+        }
+
+        $token = Cache::get("merchant_api_token_{$record->email}");
+
+        if (!$token) {
+            Notification::make()
+                ->title('Bearer token tidak tersedia, silakan coba lagi.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $token,
+        ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', [
+                    'startDate' => $start->toDateString(),
+                    'endDate' => $end->toDateString(),
+                ]);
+
+        if ($response->status() === 401) {
+            Cache::forget("merchant_api_token_{$record->email}");
+
+            Notification::make()
+                ->title('Bearer token kedaluwarsa, silakan perbarui terlebih dahulu.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        if ($response->failed()) {
+            Notification::make()
+                ->title('Gagal mengambil rekap penjualan.')
+                ->body('Terjadi kesalahan saat menghubungi server.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $payload = $response->json();
+
+        if (($payload['code'] ?? null) !== 200 || ($payload['status'] ?? null) !== 'OK') {
+            Notification::make()
+                ->title('Rekap penjualan tidak tersedia.')
+                ->body($payload['message'] ?? 'Terjadi kesalahan saat membaca data.')
+                ->danger()
+                ->send();
+
+            return false;
+        }
+
+        $dataPayload = $payload['data'] ?? [];
+
+        $summaryReport = data_get($dataPayload, 'summaryReport', []);
+
+        $customers = collect(data_get($dataPayload, 'customersReport', []))
+            ->map(fn($customer) => [
+                'customer_report_id' => data_get($customer, 'customerReportId'),
+                'nationality_id' => data_get($customer, 'nationalityId'),
+                'name' => data_get($customer, 'name'),
+                'categories' => collect(data_get($customer, 'categories', []))
+                    ->map(fn($category) => data_get($category, 'name') ?? (is_string($category) ? $category : null))
+                    ->filter()
+                    ->values()
+                    ->all(),
+                'total' => data_get($customer, 'total'),
+            ])
+            ->values()
+            ->all();
+
+        // Update Livewire component's mounted actions data directly
+        $livewire->mountedActionsData[0]['summary_sold'] = data_get($summaryReport, 'sold');
+        $livewire->mountedActionsData[0]['summary_gross'] = data_get($summaryReport, 'gross');
+        $livewire->mountedActionsData[0]['summary_modal'] = data_get($summaryReport, 'modal');
+        $livewire->mountedActionsData[0]['summary_profit'] = data_get($summaryReport, 'profit');
+        $livewire->mountedActionsData[0]['report_customers'] = $customers;
+
+        Notification::make()
+            ->title('Rekap penjualan berhasil dimuat.')
+            ->success()
+            ->send();
+
+        return true;
+    }
+
+    protected static function formatNumber(mixed $value): string
+    {
+        return is_numeric($value)
+            ? number_format((float) $value, 0, ',', '.')
+            : '-';
+    }
+
+    protected static function formatCurrency(mixed $value): string
+    {
+        return is_numeric($value)
+            ? 'Rp ' . number_format((float) $value, 0, ',', '.')
+            : '-';
+    }
+
+    protected static function renderStatCard(string $label, string $value, string $description, string $icon, string $color): string
+    {
+        $iconSvg = match ($icon) {
+            'heroicon-o-cube' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" /></svg>',
+            'heroicon-o-banknotes' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" /></svg>',
+            'heroicon-o-credit-card' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" /></svg>',
+            'heroicon-o-currency-dollar' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>',
+            default => '',
+        };
+
+        $colors = match ($color) {
+            'emerald' => ['bg' => 'bg-emerald-50 dark:bg-emerald-900/20', 'text' => 'text-emerald-600 dark:text-emerald-400', 'border' => 'border-emerald-100 dark:border-emerald-800'],
+            'blue' => ['bg' => 'bg-blue-50 dark:bg-blue-900/20', 'text' => 'text-blue-600 dark:text-blue-400', 'border' => 'border-blue-100 dark:border-blue-800'],
+            'amber' => ['bg' => 'bg-amber-50 dark:bg-amber-900/20', 'text' => 'text-amber-600 dark:text-amber-400', 'border' => 'border-amber-100 dark:border-amber-800'],
+            'purple' => ['bg' => 'bg-purple-50 dark:bg-purple-900/20', 'text' => 'text-purple-600 dark:text-purple-400', 'border' => 'border-purple-100 dark:border-purple-800'],
+            default => ['bg' => 'bg-gray-50 dark:bg-gray-900/20', 'text' => 'text-gray-600 dark:text-gray-400', 'border' => 'border-gray-100 dark:border-gray-800'],
+        };
+
+        return <<<HTML
+            <div class="relative overflow-hidden rounded-xl border {$colors['border']} bg-white dark:bg-gray-900 p-4 shadow-sm transition hover:shadow-md">
+                <div class="flex items-start justify-between">
+                    <div>
+                        <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{$label}</p>
+                        <p class="mt-2 text-xl font-bold text-gray-900 dark:text-white">{$value}</p>
+                    </div>
+                    <div class="rounded-lg p-2 {$colors['bg']} {$colors['text']}">
+                        {$iconSvg}
+                    </div>
+                </div>
+                <div class="mt-4 flex items-center gap-1">
+                    <span class="text-[10px] font-medium text-gray-400 dark:text-gray-500">{$description}</span>
+                </div>
+            </div>
+        HTML;
+    }
+
+    protected static function renderCategories(array $categories): string
+    {
+        if (empty($categories)) {
+            return '<span class="text-xs italic text-gray-400 dark:text-gray-500">-</span>';
+        }
+
+        $badges = collect($categories)
+            ->map(fn(string $category): string => sprintf(
+                '<span class="inline-flex items-center rounded-md bg-gray-50 dark:bg-gray-800 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 ring-1 ring-inset ring-gray-500/10 dark:ring-gray-700">%s</span>',
+                e($category)
+            ))
+            ->implode(' ');
+
+        return '<div class="flex flex-wrap gap-1">' . $badges . '</div>';
     }
 }
