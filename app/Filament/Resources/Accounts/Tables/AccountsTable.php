@@ -6,13 +6,6 @@ use App\Jobs\VerifyNikTransactionJob;
 use App\Models\Account;
 use App\Models\DataMasterDocument;
 use App\Models\DataNikInput;
-use Filament\Actions\Action;
-use Filament\Actions\ActionGroup;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\EditAction;
-use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
@@ -25,6 +18,13 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Wizard\Step;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteAction;
+use Filament\Actions\DeleteBulkAction;
+use Filament\Actions\EditAction;
+use Filament\Actions\ViewAction;
 use Filament\Tables\Table;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -32,6 +32,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\HtmlString;
+use Livewire\Component as LivewireComponent;
 use Throwable;
 
 class AccountsTable
@@ -55,8 +56,9 @@ class AccountsTable
                 TextColumn::make('dataNikInput.name')
                     ->label('Last Input')
                     ->placeholder('-')
-                    ->description(static fn(Account $record): ?string => $record->dataNikInput?->nik)
-                    ->description(static fn(Account $record): ?string => 'NIK: ' . $record->dataNikInput?->nik . ' | File: ' . $record->dataNikInput?->document?->original_name),
+                    ->description(static fn(Account $record): ?string => $record->dataNikInput
+                        ? 'NIK: ' . $record->dataNikInput?->nik . ' | File: ' . $record->dataNikInput?->document?->original_name
+                        : null),
             ])
             ->recordUrl(false)
             ->filters([
@@ -104,6 +106,8 @@ class AccountsTable
                         ->modalWidth('4xl')
                         ->modalCancelActionLabel('Tutup')
                         ->mountUsing(function (Action $action, Account $record, $form): void {
+                            $form->fill();
+
                             $start = now()->startOfDay();
                             $end = now()->endOfDay();
 
@@ -114,11 +118,11 @@ class AccountsTable
                             $form->fill([
                                 'report_start_date' => now()->toDateString(),
                                 'report_end_date' => now()->toDateString(),
-                                'summary_sold' => $data['summary']['sold'] ?? null,
-                                'summary_gross' => $data['summary']['gross'] ?? null,
-                                'summary_modal' => $data['summary']['modal'] ?? null,
-                                'summary_profit' => $data['summary']['profit'] ?? null,
-                                'report_customers' => $data['customers'] ?? [],
+                                'summary_sold' => data_get($data, 'summary.sold'),
+                                'summary_gross' => data_get($data, 'summary.gross'),
+                                'summary_modal' => data_get($data, 'summary.modal'),
+                                'summary_profit' => data_get($data, 'summary.profit'),
+                                'report_customers' => data_get($data, 'customers', []),
                             ]);
                         })
                         ->form([
@@ -254,7 +258,7 @@ class AccountsTable
                                 ]),
                         ])
                         ->modalSubmitActionLabel('Tampilkan Rekap')
-                        ->action(function (Action $action, Account $record, array $data): void {
+                        ->action(function (Action $action, Account $record, array $data, LivewireComponent $livewire): void {
                             $startDate = $data['report_start_date'] ?? null;
                             $endDate = $data['report_end_date'] ?? null;
 
@@ -281,18 +285,21 @@ class AccountsTable
                                 return;
                             }
 
-                            // Fetch new data and push it back into the form state so the modal updates
                             $reportData = self::fetchSalesReportData($record, $start, $end);
-                            
-                            $action->fillForm([
-                                'report_start_date' => $start->toDateString(),
-                                'report_end_date' => $end->toDateString(),
-                                'summary_sold' => $reportData['summary']['sold'] ?? null,
-                                'summary_gross' => $reportData['summary']['gross'] ?? null,
-                                'summary_modal' => $reportData['summary']['modal'] ?? null,
-                                'summary_profit' => $reportData['summary']['profit'] ?? null,
-                                'report_customers' => $reportData['customers'] ?? [],
-                            ]);
+
+                            $mountedIndex = array_key_last($livewire->mountedActions);
+
+                            if ($mountedIndex !== null) {
+                                $basePath = "mountedActions.{$mountedIndex}.data";
+
+                                $livewire->set("{$basePath}.report_start_date", $start->toDateString());
+                                $livewire->set("{$basePath}.report_end_date", $end->toDateString());
+                                $livewire->set("{$basePath}.summary_sold", data_get($reportData, 'summary.sold'));
+                                $livewire->set("{$basePath}.summary_gross", data_get($reportData, 'summary.gross'));
+                                $livewire->set("{$basePath}.summary_modal", data_get($reportData, 'summary.modal'));
+                                $livewire->set("{$basePath}.summary_profit", data_get($reportData, 'summary.profit'));
+                                $livewire->set("{$basePath}.report_customers", data_get($reportData, 'customers', []));
+                            }
 
                             Notification::make()
                                 ->title('Rekap penjualan berhasil dimuat.')
@@ -973,11 +980,17 @@ class AccountsTable
             ->all();
 
         // Update Livewire component's mounted actions data directly
-        $livewire->mountedActionsData[0]['summary_sold'] = data_get($summaryReport, 'sold');
-        $livewire->mountedActionsData[0]['summary_gross'] = data_get($summaryReport, 'gross');
-        $livewire->mountedActionsData[0]['summary_modal'] = data_get($summaryReport, 'modal');
-        $livewire->mountedActionsData[0]['summary_profit'] = data_get($summaryReport, 'profit');
-        $livewire->mountedActionsData[0]['report_customers'] = $customers;
+        $mountedIndex = array_key_last($livewire->mountedActions);
+
+        if ($mountedIndex !== null) {
+            $basePath = "mountedActions.{$mountedIndex}.data";
+
+            $livewire->set("{$basePath}.summary_sold", data_get($summaryReport, 'sold'));
+            $livewire->set("{$basePath}.summary_gross", data_get($summaryReport, 'gross'));
+            $livewire->set("{$basePath}.summary_modal", data_get($summaryReport, 'modal'));
+            $livewire->set("{$basePath}.summary_profit", data_get($summaryReport, 'profit'));
+            $livewire->set("{$basePath}.report_customers", $customers);
+        }
 
         Notification::make()
             ->title('Rekap penjualan berhasil dimuat.')

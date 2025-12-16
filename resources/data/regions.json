@@ -1,0 +1,68 @@
+[
+  {
+    "code": "35",
+    "name": "Jawa Timur",
+    "regencies": [
+      {
+        "code": "17",
+        "name": "Kabupaten Jombang",
+        "districts": [
+          { "code": "01", "name": "Perak" },
+          { "code": "02", "name": "Gudo" },
+          { "code": "03", "name": "Ngoro" },
+          { "code": "04", "name": "Bareng" },
+          { "code": "05", "name": "Wonosalam" },
+          { "code": "06", "name": "Mojoagung" },
+          { "code": "07", "name": "Mojowarno" },
+          { "code": "08", "name": "Diwek" },
+          { "code": "09", "name": "Jombang" },
+          { "code": "10", "name": "Peterongan" },
+          { "code": "11", "name": "Sumobito" },
+          { "code": "12", "name": "Kesamben" },
+          { "code": "13", "name": "Tembelang" },
+          { "code": "14", "name": "Ploso" },
+          { "code": "15", "name": "Plandaan" },
+          { "code": "16", "name": "Kabuh" },
+          { "code": "17", "name": "Kudu" },
+          { "code": "18", "name": "Bandarkedungmulyo" },
+          { "code": "19", "name": "Jogoroto" },
+          { "code": "20", "name": "Megaluh" },
+          { "code": "21", "name": "Ngusikan" }
+        ]
+      },
+      {
+        "code": "24",
+        "name": "Kabupaten Lamongan",
+        "districts": [
+          { "code": "01", "name": "Sukorame" },
+          { "code": "02", "name": "Bluluk" },
+          { "code": "03", "name": "Modo" },
+          { "code": "04", "name": "Ngimbang" },
+          { "code": "05", "name": "Babat" },
+          { "code": "06", "name": "Kedungpring" },
+          { "code": "07", "name": "Brondong" },
+          { "code": "08", "name": "Laren" },
+          { "code": "09", "name": "Sekaran" },
+          { "code": "10", "name": "Maduran" },
+          { "code": "11", "name": "Sambeng" },
+          { "code": "12", "name": "Sugio" },
+          { "code": "13", "name": "Pucuk" },
+          { "code": "14", "name": "Paciran" },
+          { "code": "15", "name": "Solokuro" },
+          { "code": "16", "name": "Mantup" },
+          { "code": "17", "name": "Sukodadi" },
+          { "code": "18", "name": "Karanggeneng" },
+          { "code": "19", "name": "Kembangbahu" },
+          { "code": "20", "name": "Kalitengah" },
+          { "code": "21", "name": "Turi" },
+          { "code": "22", "name": "Lamongan" },
+          { "code": "23", "name": "Tikung" },
+          { "code": "24", "name": "Karangbinangun" },
+          { "code": "25", "name": "Deket" },
+          { "code": "26", "name": "Glagah" },
+          { "code": "27", "name": "Sarirejo" }
+        ]
+      }
+    ]
+  }
+]

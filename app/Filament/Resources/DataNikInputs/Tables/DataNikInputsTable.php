@@ -35,6 +35,7 @@ class DataNikInputsTable
                 TextColumn::make('document.original_name')
                     ->label('Document Name')
                     ->toggleable()
+                    ->searchable()
                     ->placeholder('-'),
             ])
             ->filters([
