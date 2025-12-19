@@ -96,7 +96,7 @@ class ListDataNikInputs extends ListRecords
                         ->numeric()
                         ->default(200)
                         ->minValue(1)
-                        ->maxValue(500),
+                        ->maxValue(1000),
                 ])
                 ->action(function (array $data): void {
                     $account = Account::query()->find($data['account_id'] ?? null);
@@ -127,7 +127,7 @@ class ListDataNikInputs extends ListRecords
                     }
 
                     $amount = (int) ($data['amount'] ?? 200);
-                    $amount = max(1, min($amount, 500));
+                    $amount = max(1, min($amount, 1000));
 
                     $documentMode = $data['document_mode'] ?? 'new';
                     $document = null;
@@ -198,7 +198,7 @@ class ListDataNikInputs extends ListRecords
 
                         return;
                     }
-                    
+
                     foreach (array_values($nikList) as $index => $nik) {
                         GenerateRandomNikJob::dispatch($account->id, $document->id, $nik)->delay(now()->addSeconds(6));
                     }
@@ -408,6 +408,75 @@ class ListDataNikInputs extends ListRecords
                             fclose($handle);
                         }
                     }
+                }),
+            Action::make('exportCsv')
+                ->label('Export CSV')
+                ->icon('heroicon-o-arrow-down-tray')
+                ->color('success')
+                ->modalSubmitActionLabel('Download')
+                ->modalWidth('md')
+                ->form([
+                    Select::make('data_master_document_id')
+                        ->label('Pilih Data Master Documents')
+                        ->placeholder('-')
+                        ->options(static fn (): array => DataMasterDocument::query()
+                            ->orderByDesc('created_at')
+                            ->pluck('original_name', 'id')
+                            ->toArray())
+                        ->searchable()
+                        ->required(),
+                ])
+                ->action(function (array $data) {
+                    $document = DataMasterDocument::query()->find($data['data_master_document_id'] ?? null);
+
+                    if (! $document) {
+                        Notification::make()
+                            ->title('Dokumen tidak ditemukan.')
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    $query = DataNikInput::query()
+                        ->where('data_master_document_id', $document->id)
+                        ->orderBy('order')
+                        ->orderBy('id');
+
+                    if (! $query->exists()) {
+                        Notification::make()
+                            ->title('Tidak ada data untuk diexport.')
+                            ->body("Dokumen {$document->original_name} belum memiliki Data NIK Input.")
+                            ->warning()
+                            ->send();
+
+                        return;
+                    }
+
+                    $filename = Str::of($document->original_name ?? 'data-nik-input')
+                        ->slug('_')
+                        ->append('_', now()->format('Ymd_His'), '.csv')
+                        ->toString();
+
+                    return response()->streamDownload(static function () use ($query): void {
+                        $handle = fopen('php://output', 'w');
+
+                        fwrite($handle, "nik,name,address\n");
+
+                        foreach ($query->cursor() as $record) {
+                            $line = implode(',', [
+                                str_replace([',', "\r", "\n"], ' ', $record->nik),
+                                str_replace([',', "\r", "\n"], ' ', $record->name ?? ''),
+                                str_replace([',', "\r", "\n"], ' ', $record->address ?? ''),
+                            ]);
+
+                            fwrite($handle, $line . "\n");
+                        }
+
+                        fclose($handle);
+                    }, $filename, [
+                        'Content-Type' => 'text/csv',
+                    ]);
                 }),
         ];
     }
