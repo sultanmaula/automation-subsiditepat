@@ -25,6 +25,11 @@ class DatabaseSeeder extends Seeder
             'password' => Hash::make('Sult@n354'),
         ]);
 
+        /*
+        * =======================
+        * Account Merchant Seeder 
+        * =======================
+        */
         Account::create([
             'email' => 'vauzismcg@gmail.com',
             'pin' => '181818',
@@ -37,6 +42,16 @@ class DatabaseSeeder extends Seeder
 
         Account::create([
             'email' => 'nurulsmcg@gmail.com',
+            'pin' => '181818',
+        ]);
+
+        Account::create([
+            'email' => 'solikinmmmg@gmail.com',
+            'pin' => '181818',
+        ]);
+
+        Account::create([
+            'email' => 'rodneyevanz@gmail.com',
             'pin' => '181818',
         ]);
     }
