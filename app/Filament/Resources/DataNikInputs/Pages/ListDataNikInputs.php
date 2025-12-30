@@ -96,7 +96,7 @@ class ListDataNikInputs extends ListRecords
                         ->numeric()
                         ->default(200)
                         ->minValue(1)
-                        ->maxValue(1000),
+                        ->maxValue(5000),
                 ])
                 ->action(function (array $data): void {
                     $account = Account::query()->find($data['account_id'] ?? null);
@@ -127,7 +127,7 @@ class ListDataNikInputs extends ListRecords
                     }
 
                     $amount = (int) ($data['amount'] ?? 200);
-                    $amount = max(1, min($amount, 1000));
+                    $amount = max(1, min($amount, 5000));
 
                     $documentMode = $data['document_mode'] ?? 'new';
                     $document = null;

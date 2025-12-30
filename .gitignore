@@ -25,3 +25,4 @@ Thumbs.db
 scripts/node_modules/
 /storage
 .npm
+.cache

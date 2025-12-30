@@ -14,7 +14,7 @@ class NikRandomGenerator
 
         $birthDate ??= $this->randomBirthDate();
         $isFemale ??= (bool) random_int(0, 1);
-        $sequence ??= random_int(1, 5);
+        $sequence ??= random_int(1, 8);
 
         $day = $birthDate->day + ($isFemale ? 40 : 0);
         $datePart = sprintf('%02d%02d%02d', $day, $birthDate->month, $birthDate->year % 100);
