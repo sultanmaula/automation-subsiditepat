@@ -27,7 +27,9 @@ class LPGPanelProvider extends PanelProvider
             ->default()
             ->id('lpg')
             ->path('/lpg')
-            ->brandName('Automation LPG')
+            ->brandName(fn () => request()->is('login')
+                ? 'Portal Login'
+                : 'Automation LPG')
             ->spa()
             ->sidebarCollapsibleOnDesktop()
             ->colors([
