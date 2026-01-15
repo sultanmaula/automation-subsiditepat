@@ -3,12 +3,10 @@
 namespace App\Filament\Workshop\Resources\Sales\Schemas;
 
 use App\Models\Workshop\Product;
-use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\ViewField;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
@@ -24,9 +22,13 @@ class SaleForm
                 Section::make('Transaksi')
                     ->columns(2)
                     ->schema([
-                        Hidden::make('scan_barcode')
+                        TextInput::make('scan_barcode')
+                            ->label('Scan Barcode')
+                            ->placeholder('Scan dengan barcode scanner USB')
                             ->dehydrated(false)
                             ->live()
+                            ->autofocus()
+                            ->columnSpanFull()
                             ->afterStateUpdated(function ($state, Set $set, Get $get): void {
                                 $barcode = trim((string) $state);
 
@@ -74,13 +76,6 @@ class SaleForm
                                 $set('items', array_values($items));
                                 $set('scan_barcode', null);
                             }),
-                        ViewField::make('barcode_scanner')
-                            ->label('')
-                            ->dehydrated(false)
-                            ->view('filament.workshop.components.barcode-scanner')
-                            ->viewData([
-                                'statePath' => 'data.scan_barcode',
-                            ]),
                         TextInput::make('customer_name')
                             ->label('Nama Pelanggan')
                             ->maxLength(255),
@@ -175,8 +170,8 @@ class SaleForm
                                     ->dehydrated(),
                             ])
                             ->columns(4)
-                            ->defaultItems(1)
-                            ->minItems(1),
+                            ->defaultItems(0)
+                            ->addActionLabel('Tambah Item'),
                     ]),
             ]);
     }

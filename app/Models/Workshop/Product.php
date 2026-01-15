@@ -5,7 +5,6 @@ namespace App\Models\Workshop;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Support\Str;
 
 class Product extends Model
 {
@@ -14,7 +13,6 @@ class Product extends Model
     protected $fillable = [
         'category_id',
         'name',
-        'sku',
         'barcode',
         'unit',
         'cost_price',
@@ -30,20 +28,6 @@ class Product extends Model
         'sale_price' => 'decimal:2',
         'is_active' => 'boolean',
     ];
-
-    protected static function booted(): void
-    {
-        static::creating(function (Product $product): void {
-            if (empty($product->sku)) {
-                $product->sku = self::generateSku();
-            }
-        });
-    }
-
-    public static function generateSku(): string
-    {
-        return 'PRD-' . Str::upper(Str::random(8));
-    }
 
     public function category(): BelongsTo
     {
@@ -63,10 +47,6 @@ class Product extends Model
     public function getLabelAttribute(): string
     {
         $parts = [$this->name];
-
-        if ($this->sku) {
-            $parts[] = $this->sku;
-        }
 
         if ($this->barcode) {
             $parts[] = $this->barcode;

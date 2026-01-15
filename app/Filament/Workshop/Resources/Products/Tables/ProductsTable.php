@@ -20,10 +20,6 @@ class ProductsTable
                     ->label('Produk')
                     ->searchable()
                     ->sortable(),
-                TextColumn::make('sku')
-                    ->label('SKU')
-                    ->searchable()
-                    ->sortable(),
                 TextColumn::make('barcode')
                     ->label('Barcode')
                     ->searchable()

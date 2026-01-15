@@ -4,10 +4,22 @@ namespace App\Filament\Workshop\Resources\Sales\Pages;
 
 use App\Filament\Workshop\Resources\Sales\SaleResource;
 use Filament\Resources\Pages\CreateRecord;
+use Filament\Support\Facades\FilamentView;
+use Illuminate\Contracts\View\View;
 
 class CreateSale extends CreateRecord
 {
     protected static string $resource = SaleResource::class;
+
+    public function getHeading(): string
+    {
+        return 'Transaksi Baru';
+    }
+
+    public function getFooter(): ?View
+    {
+        return view('filament.workshop.components.autofocus-barcode');
+    }
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {

@@ -6,7 +6,6 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
-use Filament\Forms\Components\ViewField;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 
@@ -28,26 +27,12 @@ class ProductForm
                             ->relationship('category', 'name')
                             ->searchable()
                             ->preload(),
-                        TextInput::make('sku')
-                            ->label('SKU/Kode')
-                            ->required()
-                            ->unique(ignoreRecord: true)
-                            ->maxLength(50),
                         TextInput::make('barcode')
                             ->label('Barcode')
+                            ->placeholder('Scan dengan barcode scanner USB')
                             ->unique(ignoreRecord: true)
                             ->maxLength(100)
-                            ->extraInputAttributes([
-                                'data-barcode-input' => true,
-                                'data-state-path' => 'data.barcode',
-                            ]),
-                        ViewField::make('barcode_scanner')
-                            ->label('')
-                            ->dehydrated(false)
-                            ->view('filament.workshop.components.barcode-scanner')
-                            ->viewData([
-                                'statePath' => 'data.barcode',
-                            ]),
+                            ->autofocus(),
                         TextInput::make('unit')
                             ->label('Satuan')
                             ->default('pcs')
