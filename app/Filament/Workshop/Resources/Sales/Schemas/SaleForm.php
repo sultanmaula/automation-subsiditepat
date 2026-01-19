@@ -24,11 +24,14 @@ class SaleForm
                     ->schema([
                         TextInput::make('scan_barcode')
                             ->label('Scan Barcode')
-                            ->placeholder('Scan dengan barcode scanner USB')
+                            ->placeholder('Scan atau ketik barcode, lalu tekan Enter')
                             ->dehydrated(false)
-                            ->live()
+                            ->live(onBlur: true)
                             ->autofocus()
                             ->columnSpanFull()
+                            ->extraInputAttributes([
+                                'onkeydown' => "if(event.key === 'Enter') { event.preventDefault(); this.blur(); this.focus(); }",
+                            ])
                             ->afterStateUpdated(function ($state, Set $set, Get $get): void {
                                 $barcode = trim((string) $state);
 
@@ -91,17 +94,27 @@ class SaleForm
                             ->required(),
                         TextInput::make('paid')
                             ->label('Bayar')
-                            ->numeric()
+                            ->prefix('Rp')
                             ->minValue(0)
-                            ->default(0)
-                            ->live(),
+                            ->live(onBlur: true)
+                            ->extraInputAttributes([
+                                'x-on:input' => "
+                                    let val = \$event.target.value.replace(/[^0-9]/g, '');
+                                    \$event.target.value = val.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+                                ",
+                            ])
+                            ->dehydrateStateUsing(fn ($state) => (int) preg_replace('/[^0-9]/', '', (string) $state)),
                         Placeholder::make('total_preview')
                             ->label('Total')
-                            ->content(fn (Get $get): string => self::formatCurrency(self::calculateTotal($get)))
+                            ->content(fn (Get $get): \Illuminate\Support\HtmlString => new \Illuminate\Support\HtmlString(
+                                '<span style="font-size: 1.5rem; font-weight: bold; color: #16a34a;">' . self::formatCurrency(self::calculateTotal($get)) . '</span>'
+                            ))
                             ->live(),
                         Placeholder::make('change_preview')
                             ->label('Kembalian')
-                            ->content(fn (Get $get): string => self::formatCurrency(self::calculateChange($get)))
+                            ->content(fn (Get $get): \Illuminate\Support\HtmlString => new \Illuminate\Support\HtmlString(
+                                '<span style="font-size: 1.5rem; font-weight: bold; color: #dc2626;">' . self::formatCurrency(self::calculateChange($get)) . '</span>'
+                            ))
                             ->live(),
                     ]),
                 Section::make('Item')
@@ -191,7 +204,8 @@ class SaleForm
     private static function calculateChange(Get $get): float
     {
         $total = self::calculateTotal($get);
-        $paid = (float) ($get('paid') ?? 0);
+        $paidRaw = $get('paid') ?? 0;
+        $paid = (float) preg_replace('/[^0-9]/', '', (string) $paidRaw);
 
         return max($paid - $total, 0);
     }

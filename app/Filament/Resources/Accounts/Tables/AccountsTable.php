@@ -2,11 +2,13 @@
 
 namespace App\Filament\Resources\Accounts\Tables;
 
+use App\Jobs\CancelDuplicateTransactionJob;
 use App\Jobs\VerifyNikTransactionJob;
 use App\Models\Account;
 use App\Models\DataMasterDocument;
 use App\Models\DataNikInput;
 use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
 use Filament\Schemas\Components\Grid;
@@ -143,18 +145,34 @@ class AccountsTable
                                 ]),
 
                             // Hidden fields to store reactive data
-                            TextInput::make('summary_sold')->hidden()->live()->dehydrated(false),
-                            TextInput::make('summary_gross')->hidden()->live()->dehydrated(false),
-                            TextInput::make('summary_modal')->hidden()->live()->dehydrated(false),
-                            TextInput::make('summary_profit')->hidden()->live()->dehydrated(false),
+                            Hidden::make('summary_sold')->live()->dehydrated(false),
+                            Hidden::make('summary_gross')->live()->dehydrated(false),
+                            Hidden::make('summary_modal')->live()->dehydrated(false),
+                            Hidden::make('summary_profit')->live()->dehydrated(false),
+                            Hidden::make('report_customers')->live()->dehydrated(false),
+
+                            // Filter untuk jumlah tabung
+                            Select::make('filter_total_tabung')
+                                ->label('Filter Jumlah Tabung')
+                                ->placeholder('Semua')
+                                ->options([
+                                    '1' => '1 Tabung',
+                                    '2' => '2 Tabung',
+                                    '3' => '3 Tabung',
+                                    '4' => '4 Tabung',
+                                    '5' => '5 Tabung',
+                                ])
+                                ->live()
+                                ->dehydrated(false),
 
                             // Summary Section with Filament components
                             Section::make('Ringkasan Penjualan')
                                 ->icon('heroicon-o-chart-bar')
                                 ->description(fn(Get $get): string => sprintf(
-                                    'Periode: %s — %s',
+                                    'Periode: %s — %s%s',
                                     $get('report_start_date') ? Carbon::parse($get('report_start_date'))->format('d M Y') : '-',
-                                    $get('report_end_date') ? Carbon::parse($get('report_end_date'))->format('d M Y') : '-'
+                                    $get('report_end_date') ? Carbon::parse($get('report_end_date'))->format('d M Y') : '-',
+                                    $get('filter_total_tabung') ? ' | Filter: ' . $get('filter_total_tabung') . ' Tabung' : ''
                                 ))
                                 ->collapsible()
                                 ->schema([
@@ -166,7 +184,7 @@ class AccountsTable
                                                 ->content(fn(Get $get): HtmlString => new HtmlString(
                                                     self::renderStatCard(
                                                         'Tabung Terjual',
-                                                        self::formatNumber($get('summary_sold')),
+                                                        self::formatNumber(self::getDisplaySold($get)),
                                                         'Unit terjual',
                                                         'heroicon-o-cube',
                                                         'emerald'
@@ -178,7 +196,7 @@ class AccountsTable
                                                 ->content(fn(Get $get): HtmlString => new HtmlString(
                                                     self::renderStatCard(
                                                         'Omzet (Gross)',
-                                                        self::formatCurrency($get('summary_gross')),
+                                                        self::formatCurrency(self::getDisplayGross($get)),
                                                         'Total pendapatan',
                                                         'heroicon-o-banknotes',
                                                         'blue'
@@ -190,7 +208,7 @@ class AccountsTable
                                                 ->content(fn(Get $get): HtmlString => new HtmlString(
                                                     self::renderStatCard(
                                                         'Modal',
-                                                        self::formatCurrency($get('summary_modal')),
+                                                        self::formatCurrency(self::getDisplayModal($get)),
                                                         'Total pengeluaran',
                                                         'heroicon-o-credit-card',
                                                         'amber'
@@ -202,7 +220,7 @@ class AccountsTable
                                                 ->content(fn(Get $get): HtmlString => new HtmlString(
                                                     self::renderStatCard(
                                                         'Profit',
-                                                        self::formatCurrency($get('summary_profit')),
+                                                        self::formatCurrency(self::getDisplayProfit($get)),
                                                         'Keuntungan bersih',
                                                         'heroicon-o-currency-dollar',
                                                         'purple'
@@ -212,49 +230,30 @@ class AccountsTable
                                 ]),
 
                             // Customers Section with Repeater
-                            Section::make(fn(Get $get): string => sprintf('Daftar Konsumen (%d)', count($get('report_customers') ?? [])))
+                            Section::make(fn(Get $get): string => sprintf(
+                                'Daftar Konsumen (%d)',
+                                count(self::filterCustomersByTotal($get('report_customers') ?? [], $get('filter_total_tabung')))
+                            ))
                                 ->icon('heroicon-o-user-group')
                                 ->description('Detail transaksi per konsumen')
                                 ->collapsible()
                                 ->collapsed(fn(Get $get): bool => count($get('report_customers') ?? []) > 10)
                                 ->schema([
-                                    Repeater::make('report_customers')
+                                    Placeholder::make('filtered_customers_list')
                                         ->label('')
-                                        ->schema([
-                                            Grid::make(4)
-                                                ->schema([
-                                                    Placeholder::make('customer_name')
-                                                        ->label('Nama')
-                                                        ->content(fn(Get $get): string => $get('name') ?? 'Tanpa Nama'),
-                                                    Placeholder::make('customer_nik')
-                                                        ->label('NIK')
-                                                        ->content(fn(Get $get): string => $get('nationality_id') ?? '-'),
-                                                    Placeholder::make('customer_total')
-                                                        ->label('Total Belanja')
-                                                        ->content(fn(Get $get): HtmlString => new HtmlString(
-                                                            '<span class="font-bold text-primary-600 dark:text-primary-400">' .
-                                                            self::formatCurrency($get('total')) .
-                                                            '</span>'
-                                                        )),
-                                                    Placeholder::make('customer_categories')
-                                                        ->label('Kategori')
-                                                        ->content(fn(Get $get): HtmlString => new HtmlString(
-                                                            self::renderCategories($get('categories') ?? [])
-                                                        )),
-                                                ]),
-                                        ])
-                                        ->deletable(false)
-                                        ->addable(false)
-                                        ->reorderable(false)
-                                        ->columns(1)
-                                        ->itemLabel(fn(array $state): string => sprintf(
-                                            '#%s - %s',
-                                            $state['customer_report_id'] ?? '-',
-                                            $state['name'] ?? 'Tanpa Nama'
-                                        ))
-                                        ->collapsed()
                                         ->live()
-                                        ->dehydrated(false),
+                                        ->content(function (Get $get): HtmlString {
+                                            $customers = $get('report_customers') ?? [];
+                                            $filterTotal = $get('filter_total_tabung');
+
+                                            $filtered = self::filterCustomersByTotal($customers, $filterTotal);
+
+                                            if (empty($filtered)) {
+                                                return new HtmlString('<p class="text-sm text-gray-500 dark:text-gray-400 italic">Tidak ada data konsumen.</p>');
+                                            }
+
+                                            return new HtmlString(self::renderCustomersList($filtered));
+                                        }),
                                 ]),
                         ])
                         ->modalSubmitActionLabel('Tampilkan Rekap')
@@ -287,18 +286,16 @@ class AccountsTable
 
                             $reportData = self::fetchSalesReportData($record, $start, $end);
 
-                            $mountedIndex = array_key_last($livewire->mountedActions);
+                            // Update form data via Livewire component's mountedActions
+                            $mountedActionIndex = array_key_last($livewire->mountedActions);
 
-                            if ($mountedIndex !== null) {
-                                $basePath = "mountedActions.{$mountedIndex}.data";
-
-                                $livewire->set("{$basePath}.report_start_date", $start->toDateString());
-                                $livewire->set("{$basePath}.report_end_date", $end->toDateString());
-                                $livewire->set("{$basePath}.summary_sold", data_get($reportData, 'summary.sold'));
-                                $livewire->set("{$basePath}.summary_gross", data_get($reportData, 'summary.gross'));
-                                $livewire->set("{$basePath}.summary_modal", data_get($reportData, 'summary.modal'));
-                                $livewire->set("{$basePath}.summary_profit", data_get($reportData, 'summary.profit'));
-                                $livewire->set("{$basePath}.report_customers", data_get($reportData, 'customers', []));
+                            if ($mountedActionIndex !== null) {
+                                $livewire->mountedActions[$mountedActionIndex]['data']['summary_sold'] = data_get($reportData, 'summary.sold');
+                                $livewire->mountedActions[$mountedActionIndex]['data']['summary_gross'] = data_get($reportData, 'summary.gross');
+                                $livewire->mountedActions[$mountedActionIndex]['data']['summary_modal'] = data_get($reportData, 'summary.modal');
+                                $livewire->mountedActions[$mountedActionIndex]['data']['summary_profit'] = data_get($reportData, 'summary.profit');
+                                $livewire->mountedActions[$mountedActionIndex]['data']['report_customers'] = data_get($reportData, 'customers', []);
+                                $livewire->mountedActions[$mountedActionIndex]['data']['filter_total_tabung'] = null;
                             }
 
                             Notification::make()
@@ -308,7 +305,72 @@ class AccountsTable
                                 ->send();
 
                             $action->halt();
-                        }),
+                        })
+                        ->extraModalFooterActions([
+                            Action::make('cancelTransaction')
+                                ->label('Batalkan Transaksi')
+                                ->color('danger')
+                                ->requiresConfirmation()
+                                ->modalHeading('Batalkan Transaksi')
+                                ->modalDescription('Apakah Anda yakin ingin membatalkan transaksi duplikat? Sistem akan membatalkan transaksi ganda dan hanya menyisakan 1 transaksi per konsumen.')
+                                ->modalSubmitActionLabel('Ya, Batalkan')
+                                ->modalCancelActionLabel('Tidak')
+                                ->action(function (Account $record, LivewireComponent $livewire): void {
+                                    // Get data from parent action's mounted data
+                                    $parentActionIndex = array_key_first($livewire->mountedActions);
+                                    $parentData = $livewire->mountedActions[$parentActionIndex]['data'] ?? [];
+
+                                    $startDate = $parentData['report_start_date'] ?? null;
+                                    $endDate = $parentData['report_end_date'] ?? null;
+                                    $customers = $parentData['report_customers'] ?? [];
+
+                                    if (!$startDate || !$endDate) {
+                                        Notification::make()
+                                            ->title('Silakan pilih rentang tanggal terlebih dahulu.')
+                                            ->warning()
+                                            ->send();
+                                        return;
+                                    }
+
+                                    if (empty($customers)) {
+                                        Notification::make()
+                                            ->title('Tidak ada data konsumen untuk diproses.')
+                                            ->warning()
+                                            ->send();
+                                        return;
+                                    }
+
+                                    // Dispatch job for each customer that has more than 1 transaction
+                                    $dispatchedCount = 0;
+                                    foreach ($customers as $customer) {
+                                        $total = (int) ($customer['total'] ?? 0);
+                                        $customerReportId = $customer['customer_report_id'] ?? null;
+
+                                        if ($total > 1 && $customerReportId) {
+                                            CancelDuplicateTransactionJob::dispatch(
+                                                $record,
+                                                $customerReportId,
+                                                $startDate,
+                                                $endDate,
+                                            );
+                                            $dispatchedCount++;
+                                        }
+                                    }
+
+                                    if ($dispatchedCount > 0) {
+                                        Notification::make()
+                                            ->title('Proses pembatalan transaksi dimulai.')
+                                            ->body(sprintf('%d konsumen dengan transaksi ganda akan diproses.', $dispatchedCount))
+                                            ->success()
+                                            ->send();
+                                    } else {
+                                        Notification::make()
+                                            ->title('Tidak ada transaksi ganda yang perlu dibatalkan.')
+                                            ->info()
+                                            ->send();
+                                    }
+                                }),
+                        ]),
                     Action::make('infoAccount')
                         ->label('Info Account')
                         ->icon('heroicon-s-information-circle')
@@ -638,7 +700,8 @@ class AccountsTable
                 BulkActionGroup::make([
                     DeleteBulkAction::make(),
                 ]),
-            ]);
+            ])
+            ->poll('5s');
     }
 
     protected static function fetchSalesReportData(Account $record, Carbon $start, Carbon $end): array
@@ -1017,37 +1080,37 @@ class AccountsTable
     protected static function renderStatCard(string $label, string $value, string $description, string $icon, string $color): string
     {
         $iconSvg = match ($icon) {
-            'heroicon-o-cube' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" /></svg>',
-            'heroicon-o-banknotes' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" /></svg>',
-            'heroicon-o-credit-card' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" /></svg>',
-            'heroicon-o-currency-dollar' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>',
+            'heroicon-o-cube' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width: 20px; height: 20px;"><path stroke-linecap="round" stroke-linejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" /></svg>',
+            'heroicon-o-banknotes' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width: 20px; height: 20px;"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" /></svg>',
+            'heroicon-o-credit-card' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width: 20px; height: 20px;"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Z" /></svg>',
+            'heroicon-o-currency-dollar' => '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="width: 20px; height: 20px;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>',
             default => '',
         };
 
         $colors = match ($color) {
-            'emerald' => ['bg' => 'bg-emerald-50 dark:bg-emerald-900/20', 'text' => 'text-emerald-600 dark:text-emerald-400', 'border' => 'border-emerald-100 dark:border-emerald-800'],
-            'blue' => ['bg' => 'bg-blue-50 dark:bg-blue-900/20', 'text' => 'text-blue-600 dark:text-blue-400', 'border' => 'border-blue-100 dark:border-blue-800'],
-            'amber' => ['bg' => 'bg-amber-50 dark:bg-amber-900/20', 'text' => 'text-amber-600 dark:text-amber-400', 'border' => 'border-amber-100 dark:border-amber-800'],
-            'purple' => ['bg' => 'bg-purple-50 dark:bg-purple-900/20', 'text' => 'text-purple-600 dark:text-purple-400', 'border' => 'border-purple-100 dark:border-purple-800'],
-            default => ['bg' => 'bg-gray-50 dark:bg-gray-900/20', 'text' => 'text-gray-600 dark:text-gray-400', 'border' => 'border-gray-100 dark:border-gray-800'],
+            'emerald' => ['bg' => '#ecfdf5', 'text' => '#059669', 'border' => '#d1fae5'],
+            'blue' => ['bg' => '#eff6ff', 'text' => '#2563eb', 'border' => '#dbeafe'],
+            'amber' => ['bg' => '#fffbeb', 'text' => '#d97706', 'border' => '#fef3c7'],
+            'purple' => ['bg' => '#faf5ff', 'text' => '#9333ea', 'border' => '#f3e8ff'],
+            default => ['bg' => '#f9fafb', 'text' => '#6b7280', 'border' => '#f3f4f6'],
         };
 
         return <<<HTML
-            <div class="relative overflow-hidden rounded-xl border {$colors['border']} bg-white dark:bg-gray-900 p-4 shadow-sm transition hover:shadow-md">
-                <div class="flex items-start justify-between">
-                    <div>
-                        <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{$label}</p>
-                        <p class="mt-2 text-xl font-bold text-gray-900 dark:text-white">{$value}</p>
-                    </div>
-                    <div class="rounded-lg p-2 {$colors['bg']} {$colors['text']}">
-                        {$iconSvg}
-                    </div>
-                </div>
-                <div class="mt-4 flex items-center gap-1">
-                    <span class="text-[10px] font-medium text-gray-400 dark:text-gray-500">{$description}</span>
-                </div>
-            </div>
-        HTML;
+<div style="position: relative; overflow: hidden; border-radius: 12px; border: 1px solid {$colors['border']}; background-color: #ffffff; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+<div style="display: flex; align-items: flex-start; justify-content: space-between;">
+<div>
+<p style="font-size: 12px; font-weight: 500; color: #6b7280; margin: 0;">{$label}</p>
+<p style="margin-top: 8px; font-size: 18px; font-weight: 700; color: #111827; margin-bottom: 0; white-space: nowrap;">{$value}</p>
+</div>
+<div style="border-radius: 8px; padding: 8px; background-color: {$colors['bg']}; color: {$colors['text']}; display: flex; align-items: center; justify-content: center;">
+{$iconSvg}
+</div>
+</div>
+<div style="margin-top: 12px;">
+<span style="font-size: 10px; font-weight: 500; color: #9ca3af;">{$description}</span>
+</div>
+</div>
+HTML;
     }
 
     protected static function renderCategories(array $categories): string
@@ -1064,5 +1127,162 @@ class AccountsTable
             ->implode(' ');
 
         return '<div class="flex flex-wrap gap-1">' . $badges . '</div>';
+    }
+
+    /**
+     * Get display value for sold - use API value when no filter, calculate when filtered
+     */
+    protected static function getDisplaySold(Get $get): int
+    {
+        $filterTotal = $get('filter_total_tabung');
+
+        // Jika ada filter, hitung dari customers yang difilter
+        if ($filterTotal !== null && $filterTotal !== '') {
+            return self::calculateFilteredSold($get('report_customers') ?? [], $filterTotal);
+        }
+
+        // Jika tidak ada filter, gunakan nilai dari API
+        return (int) ($get('summary_sold') ?? 0);
+    }
+
+    /**
+     * Get display value for gross - use API value when no filter, calculate when filtered
+     */
+    protected static function getDisplayGross(Get $get): int
+    {
+        $filterTotal = $get('filter_total_tabung');
+
+        if ($filterTotal !== null && $filterTotal !== '') {
+            return self::calculateFilteredGross($get('report_customers') ?? [], $filterTotal);
+        }
+
+        return (int) ($get('summary_gross') ?? 0);
+    }
+
+    /**
+     * Get display value for modal - use API value when no filter, calculate when filtered
+     */
+    protected static function getDisplayModal(Get $get): int
+    {
+        $filterTotal = $get('filter_total_tabung');
+
+        if ($filterTotal !== null && $filterTotal !== '') {
+            return self::calculateFilteredModal($get('report_customers') ?? [], $filterTotal);
+        }
+
+        return (int) ($get('summary_modal') ?? 0);
+    }
+
+    /**
+     * Get display value for profit - use API value when no filter, calculate when filtered
+     */
+    protected static function getDisplayProfit(Get $get): int
+    {
+        $filterTotal = $get('filter_total_tabung');
+
+        if ($filterTotal !== null && $filterTotal !== '') {
+            return self::calculateFilteredProfit($get('report_customers') ?? [], $filterTotal);
+        }
+
+        return (int) ($get('summary_profit') ?? 0);
+    }
+
+    protected static function filterCustomersByTotal(array $customers, ?string $filterTotal): array
+    {
+        if ($filterTotal === null || $filterTotal === '') {
+            return $customers;
+        }
+
+        return collect($customers)
+            ->filter(fn(array $customer): bool => (int) ($customer['total'] ?? 0) === (int) $filterTotal)
+            ->values()
+            ->all();
+    }
+
+    protected static function calculateFilteredSold(array $customers, ?string $filterTotal): int
+    {
+        $filtered = self::filterCustomersByTotal($customers, $filterTotal);
+
+        return collect($filtered)->sum(fn(array $customer): int => (int) ($customer['total'] ?? 0));
+    }
+
+    protected static function calculateFilteredGross(array $customers, ?string $filterTotal): int
+    {
+        $filtered = self::filterCustomersByTotal($customers, $filterTotal);
+        $count = count($filtered);
+
+        // Harga per tabung Rp 18.500
+        return $count > 0 ? self::calculateFilteredSold($customers, $filterTotal) * 18500 : 0;
+    }
+
+    protected static function calculateFilteredModal(array $customers, ?string $filterTotal): int
+    {
+        $filtered = self::filterCustomersByTotal($customers, $filterTotal);
+        $count = count($filtered);
+
+        // Modal per tabung Rp 17.600
+        return $count > 0 ? self::calculateFilteredSold($customers, $filterTotal) * 17600 : 0;
+    }
+
+    protected static function calculateFilteredProfit(array $customers, ?string $filterTotal): int
+    {
+        return self::calculateFilteredGross($customers, $filterTotal) - self::calculateFilteredModal($customers, $filterTotal);
+    }
+
+    protected static function renderCustomersList(array $customers): string
+    {
+        if (empty($customers)) {
+            return '<p style="font-size: 14px; color: #6b7280; font-style: italic;">Tidak ada data konsumen.</p>';
+        }
+
+        $rows = collect($customers)->map(function (array $customer, int $index): string {
+            $fullReportId = $customer['customer_report_id'] ?? '-';
+            $reportId = strlen($fullReportId) > 8 ? '...' . substr($fullReportId, -6) : $fullReportId;
+            $name = e($customer['name'] ?? 'Tanpa Nama');
+            $nik = e($customer['nationality_id'] ?? '-');
+            $total = (int) ($customer['total'] ?? 0);
+            $categories = self::renderCategoriesInline($customer['categories'] ?? []);
+            $bgColor = $index % 2 === 0 ? '#f9fafb' : '#ffffff';
+
+            return <<<HTML
+<tr style="background-color: {$bgColor};" title="ID: {$fullReportId}">
+<td style="padding: 8px 12px; font-size: 13px; color: #6b7280;">{$reportId}</td>
+<td style="padding: 8px 12px; font-size: 13px; color: #111827;">{$name}</td>
+<td style="padding: 8px 12px; font-size: 13px; color: #6b7280;">{$nik}</td>
+<td style="padding: 8px 12px; font-size: 13px; font-weight: 600; color: #f59e0b; white-space: nowrap;">{$total}&nbsp;Tabung</td>
+<td style="padding: 8px 12px; font-size: 13px; color: #6b7280;">{$categories}</td>
+</tr>
+HTML;
+        })->implode('');
+
+        return <<<HTML
+<div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
+<table style="width: 100%; border-collapse: collapse; min-width: 600px;">
+<thead>
+<tr style="background-color: #f3f4f6; border-bottom: 2px solid #e5e7eb;">
+<th style="padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase;">ID</th>
+<th style="padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase;">Nama</th>
+<th style="padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase;">NIK</th>
+<th style="padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase;">Total</th>
+<th style="padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: #6b7280; text-transform: uppercase;">Kategori</th>
+</tr>
+</thead>
+<tbody>
+{$rows}
+</tbody>
+</table>
+</div>
+HTML;
+    }
+
+    protected static function renderCategoriesInline(array $categories): string
+    {
+        if (empty($categories)) {
+            return '-';
+        }
+
+        return collect($categories)
+            ->map(fn(string $category): string => e($category))
+            ->implode(', ');
     }
 }

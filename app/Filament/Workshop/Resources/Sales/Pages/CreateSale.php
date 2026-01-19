@@ -23,21 +23,30 @@ class CreateSale extends CreateRecord
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {
-        $items = $data['items'] ?? [];
-        $total = collect($items)->sum(function (array $item): float {
-            $quantity = (float) ($item['quantity'] ?? 0);
-            $unitPrice = (float) ($item['unit_price'] ?? 0);
+        // Parse paid - nilai sudah di-dehydrate oleh form jadi integer
+        $paid = (float) ($data['paid'] ?? 0);
 
-            return $quantity * $unitPrice;
-        });
-
-        $paid = (float) ($data['paid'] ?? $total);
-
-        $data['total'] = $total;
+        // Set nilai awal, total akan dihitung di afterCreate
         $data['paid'] = $paid;
-        $data['change'] = max($paid - $total, 0);
+        $data['total'] = 0;
+        $data['change'] = 0;
         $data['status'] = 'paid';
 
         return $data;
+    }
+
+    protected function afterCreate(): void
+    {
+        // Hitung total dari items yang sudah tersimpan
+        $record = $this->record;
+        $total = (float) $record->items()->sum(\Illuminate\Support\Facades\DB::raw('quantity * unit_price'));
+
+        $paid = (float) $record->paid;
+        $change = max($paid - $total, 0);
+
+        $record->update([
+            'total' => $total,
+            'change' => $change,
+        ]);
     }
 }
