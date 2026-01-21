@@ -16,6 +16,25 @@ services:
       - postgres
       - redis
 
+  scheduler:
+    build: .
+    container_name: laravel-scheduler
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - .:/var/www
+    command: >
+      sh -c "while true; do
+        php artisan schedule:run;
+        sleep 60;
+      done"
+    networks:
+      - app
+    depends_on:
+      - app
+      - redis
+      - postgres
+
   nginx:
     image: nginx:alpine
     container_name: app-nginx-automation-subsiditepatlpg

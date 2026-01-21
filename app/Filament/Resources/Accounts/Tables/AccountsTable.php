@@ -68,36 +68,32 @@ class AccountsTable
             ])
             ->recordActions([
                 ActionGroup::make([
-                    // Action::make('fetchNewToken')
-                    //     ->label('Fetch New Token')
-                    //     ->icon('heroicon-s-arrow-path')
-                    //     ->requiresConfirmation()
-                    //     ->modalHeading('Fetch new Token from Subsidi Tepat LPG?')
-                    //     ->hiddenLabel()
-                    //     ->extraAttributes(['x-tooltip.raw' => 'Fetch New Token'])
-                    //     ->color('info')
-                    //     ->action(function (Account $record): void {
-                    //         $exitCode = Artisan::call('merchant:fetch-token', [
-                    //             '--email' => $record->email,
-                    //             '--pin'   => $record->pin,
-                    //         ]);
+                    Action::make('toggleAutoRetrieve')
+                        ->label(fn(Account $record): string => $record->auto_retrieve ? 'Auto Retrieve: ON' : 'Auto Retrieve: OFF')
+                        ->icon(fn(Account $record): string => $record->auto_retrieve ? 'heroicon-s-check-circle' : 'heroicon-s-x-circle')
+                        ->hiddenLabel()
+                        ->extraAttributes(fn(Account $record): array => [
+                            'x-tooltip.raw' => $record->auto_retrieve ? 'Auto Retrieve: ON' : 'Auto Retrieve: OFF',
+                        ])
+                        ->color(fn(Account $record): string => $record->auto_retrieve ? 'success' : 'danger')
+                        ->action(function (Account $record): void {
+                            if ($record->auto_retrieve == false && (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL))
+                                Artisan::call('merchant:fetch-token', [
+                                    '--email' => $record->email,
+                                    '--pin' => $record->pin,
+                                ]);
+                            
+                            $record->update([
+                                'auto_retrieve' => !$record->auto_retrieve,
+                            ]);
 
-                    //         if ($exitCode === Command::SUCCESS) {
-                    //             $record->update([
-                    //                 'last_update_api' => now(),
-                    //             ]);
+                            $status = $record->auto_retrieve ? 'diaktifkan' : 'dinonaktifkan';
 
-                    //             Notification::make()
-                    //                 ->title('Bearer Token API successfully updated.')
-                    //                 ->success()
-                    //                 ->send();
-                    //         } elseif ($exitCode === Command::FAILURE) {
-                    //             Notification::make()
-                    //                 ->title('Failed to Fetch Bearer Token API.')
-                    //                 ->danger()
-                    //                 ->send();
-                    //         }
-                    //     }),
+                            Notification::make()
+                                ->title("Auto Retrieve berhasil {$status}.")
+                                ->success()
+                                ->send();
+                        }),
                     Action::make('salesReport')
                         ->label('Rekap Penjualan')
                         ->icon('heroicon-s-chart-bar')
@@ -150,30 +146,98 @@ class AccountsTable
                             Hidden::make('summary_modal')->live()->dehydrated(false),
                             Hidden::make('summary_profit')->live()->dehydrated(false),
                             Hidden::make('report_customers')->live()->dehydrated(false),
+                            Hidden::make('searched_nik')->live()->dehydrated(false),
 
-                            // Filter untuk jumlah tabung
-                            Select::make('filter_total_tabung')
-                                ->label('Filter Jumlah Tabung')
-                                ->placeholder('Semua')
-                                ->options([
-                                    '1' => '1 Tabung',
-                                    '2' => '2 Tabung',
-                                    '3' => '3 Tabung',
-                                    '4' => '4 Tabung',
-                                    '5' => '5 Tabung',
-                                ])
-                                ->live()
-                                ->dehydrated(false),
+                            // Filter untuk jumlah tabung dan NIK
+                            Grid::make(3)
+                                ->schema([
+                                    Select::make('filter_total_tabung')
+                                        ->label('Filter Jumlah Tabung')
+                                        ->placeholder('Semua')
+                                        ->options([
+                                            '1' => '1 Tabung',
+                                            '2' => '2 Tabung',
+                                            '3' => '3 Tabung',
+                                            '4' => '4 Tabung',
+                                            '5' => '5 Tabung',
+                                        ])
+                                        ->live()
+                                        ->dehydrated(false),
+                                    TextInput::make('filter_nik')
+                                        ->label('Cari NIK')
+                                        ->placeholder('Masukkan NIK')
+                                        ->dehydrated(false),
+                                    \Filament\Schemas\Components\Actions::make([
+                                        Action::make('searchNik')
+                                            ->label('Cari NIK')
+                                            ->icon('heroicon-o-magnifying-glass')
+                                            ->action(function (Get $get, \Filament\Schemas\Components\Utilities\Set $set, Account $record): void {
+                                                $filterNik = $get('filter_nik');
+                                                $startDate = $get('report_start_date');
+                                                $endDate = $get('report_end_date');
+
+                                                if (!$filterNik || trim($filterNik) === '') {
+                                                    Notification::make()
+                                                        ->title('Masukkan NIK terlebih dahulu.')
+                                                        ->warning()
+                                                        ->send();
+                                                    return;
+                                                }
+
+                                                if (!$startDate || !$endDate) {
+                                                    Notification::make()
+                                                        ->title('Silakan pilih rentang tanggal terlebih dahulu.')
+                                                        ->warning()
+                                                        ->send();
+                                                    return;
+                                                }
+
+                                                $start = Carbon::parse($startDate)->startOfDay();
+                                                $end = Carbon::parse($endDate)->endOfDay();
+
+                                                // Fetch data with NIK search
+                                                $reportData = self::fetchSalesReportData($record, $start, $end, $filterNik);
+
+                                                // Update form data via Set
+                                                $set('summary_sold', data_get($reportData, 'summary.sold'));
+                                                $set('summary_gross', data_get($reportData, 'summary.gross'));
+                                                $set('summary_modal', data_get($reportData, 'summary.modal'));
+                                                $set('summary_profit', data_get($reportData, 'summary.profit'));
+                                                $set('report_customers', data_get($reportData, 'customers', []));
+                                                $set('filter_total_tabung', null);
+                                                $set('searched_nik', $filterNik);
+
+                                                $customerCount = count(data_get($reportData, 'customers', []));
+
+                                                Notification::make()
+                                                    ->title('Pencarian NIK selesai.')
+                                                    ->body(sprintf('Ditemukan %d konsumen dengan NIK mengandung "%s"', $customerCount, $filterNik))
+                                                    ->success()
+                                                    ->send();
+                                            }),
+                                    ])->verticallyAlignEnd(),
+                                ]),
 
                             // Summary Section with Filament components
                             Section::make('Ringkasan Penjualan')
                                 ->icon('heroicon-o-chart-bar')
-                                ->description(fn(Get $get): string => sprintf(
-                                    'Periode: %s — %s%s',
-                                    $get('report_start_date') ? Carbon::parse($get('report_start_date'))->format('d M Y') : '-',
-                                    $get('report_end_date') ? Carbon::parse($get('report_end_date'))->format('d M Y') : '-',
-                                    $get('filter_total_tabung') ? ' | Filter: ' . $get('filter_total_tabung') . ' Tabung' : ''
-                                ))
+                                ->description(function (Get $get): string {
+                                    $period = sprintf(
+                                        'Periode: %s — %s',
+                                        $get('report_start_date') ? Carbon::parse($get('report_start_date'))->format('d M Y') : '-',
+                                        $get('report_end_date') ? Carbon::parse($get('report_end_date'))->format('d M Y') : '-'
+                                    );
+
+                                    $filters = [];
+                                    if ($get('filter_total_tabung')) {
+                                        $filters[] = $get('filter_total_tabung') . ' Tabung';
+                                    }
+                                    if ($get('searched_nik')) {
+                                        $filters[] = 'NIK: ' . $get('searched_nik');
+                                    }
+
+                                    return $period . (count($filters) > 0 ? ' | Filter: ' . implode(', ', $filters) : '');
+                                })
                                 ->collapsible()
                                 ->schema([
                                     Grid::make(4)
@@ -328,6 +392,14 @@ class AccountsTable
                                         Notification::make()
                                             ->title('Silakan pilih rentang tanggal terlebih dahulu.')
                                             ->warning()
+                                            ->send();
+                                        return;
+                                    }
+
+                                    if ($startDate !== $endDate) {
+                                        Notification::make()
+                                            ->title('Rentang tanggal harus sama.')
+                                            ->danger()
                                             ->send();
                                         return;
                                     }
@@ -704,7 +776,7 @@ class AccountsTable
             ->poll('5s');
     }
 
-    protected static function fetchSalesReportData(Account $record, Carbon $start, Carbon $end): array
+    protected static function fetchSalesReportData(Account $record, Carbon $start, Carbon $end, ?string $search = null): array
     {
         if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL) {
             Artisan::call('merchant:fetch-token', [
@@ -719,12 +791,19 @@ class AccountsTable
             return ['summary' => [], 'customers' => []];
         }
 
+        $queryParams = [
+            'startDate' => $start->toDateString(),
+            'endDate' => $end->toDateString(),
+        ];
+
+        // Add search parameter if provided
+        if ($search !== null && trim($search) !== '') {
+            $queryParams['search'] = trim($search);
+        }
+
         $response = Http::withHeaders([
             'Authorization' => 'Bearer ' . $token,
-        ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', [
-                    'startDate' => $start->toDateString(),
-                    'endDate' => $end->toDateString(),
-                ]);
+        ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', $queryParams);
 
         if ($response->status() === 401) {
             Cache::forget("merchant_api_token_{$record->email}");
@@ -1130,14 +1209,24 @@ HTML;
     }
 
     /**
+     * Check if total tabung filter is active
+     */
+    protected static function hasActiveFilter(Get $get): bool
+    {
+        $filterTotal = $get('filter_total_tabung');
+
+        return $filterTotal !== null && $filterTotal !== '';
+    }
+
+    /**
      * Get display value for sold - use API value when no filter, calculate when filtered
      */
     protected static function getDisplaySold(Get $get): int
     {
         $filterTotal = $get('filter_total_tabung');
 
-        // Jika ada filter, hitung dari customers yang difilter
-        if ($filterTotal !== null && $filterTotal !== '') {
+        // Jika ada filter jumlah tabung, hitung dari customers yang difilter
+        if (self::hasActiveFilter($get)) {
             return self::calculateFilteredSold($get('report_customers') ?? [], $filterTotal);
         }
 
@@ -1152,7 +1241,7 @@ HTML;
     {
         $filterTotal = $get('filter_total_tabung');
 
-        if ($filterTotal !== null && $filterTotal !== '') {
+        if (self::hasActiveFilter($get)) {
             return self::calculateFilteredGross($get('report_customers') ?? [], $filterTotal);
         }
 
@@ -1166,7 +1255,7 @@ HTML;
     {
         $filterTotal = $get('filter_total_tabung');
 
-        if ($filterTotal !== null && $filterTotal !== '') {
+        if (self::hasActiveFilter($get)) {
             return self::calculateFilteredModal($get('report_customers') ?? [], $filterTotal);
         }
 
@@ -1180,7 +1269,7 @@ HTML;
     {
         $filterTotal = $get('filter_total_tabung');
 
-        if ($filterTotal !== null && $filterTotal !== '') {
+        if (self::hasActiveFilter($get)) {
             return self::calculateFilteredProfit($get('report_customers') ?? [], $filterTotal);
         }
 

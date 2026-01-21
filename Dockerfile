@@ -40,9 +40,8 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 # opsional: install puppeteer sekali (global atau di /var/www/html/scripts)
 WORKDIR /var/www/html/scripts
 RUN npm init -y && npm i puppeteer
-WORKDIR /var/www/html
 
-WORKDIR /var/www
+WORKDIR /var/www/html
 COPY . .
 
 RUN mkdir storage
