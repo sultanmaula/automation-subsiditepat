@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Account;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 
 class AutoRetrieveDataAccounts extends Command
 {
@@ -34,6 +35,13 @@ class AutoRetrieveDataAccounts extends Command
                 '--email' => $account->email,
                 '--pin'   => $account->pin,
             ]);
+
+
+            if (Cache::get("merchant_api_token_{$account->email}")) {
+                //
+            }
         }
+
+        return $this->info('Success execution command!');
     }
 }
