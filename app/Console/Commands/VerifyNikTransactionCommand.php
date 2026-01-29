@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Account;
+use App\Models\NikInputHistory;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -14,7 +15,9 @@ class VerifyNikTransactionCommand extends Command
 {
     protected $signature = 'merchant:verify-nik
         {account : Account ID or email address}
-        {nik : NIK number to verify and submit}';
+        {nik : NIK number to verify and submit}
+        {--document-id= : Data Master Document ID (optional)}
+        {--nik-input-id= : Data NIK Input ID (optional)}';
 
     protected $description = 'Verify a NIK and submit a transaction using the merchant API.';
 
@@ -38,6 +41,15 @@ class VerifyNikTransactionCommand extends Command
             return Command::FAILURE;
         }
 
+        /**
+         * Add validation Daily Limit
+         */
+        $dailyLimit = 200;
+        $inputToday = $account->nikInputHistories()->where('input_date', now()->toDateString())->count();
+        if ($inputToday >= $dailyLimit) {
+            return Command::SUCCESS;
+        }
+
         if (!Cache::get("merchant_api_token_{$account->email}")) {
             Artisan::call('merchant:fetch-token', [
                 '--email' => $account->email,
@@ -47,9 +59,12 @@ class VerifyNikTransactionCommand extends Command
 
         $bearerToken = Cache::get("merchant_api_token_{$account->email}");
 
+        $documentId = $this->option('document-id') ? (int) $this->option('document-id') : null;
+        $nikInputId = $this->option('nik-input-id') ? (int) $this->option('nik-input-id') : null;
+
         try {
             $verifyData = $this->verifyNik($bearerToken, $nik);
-            $transactionResponse = $this->submitTransaction($bearerToken, $nik, $verifyData, $account);
+            $transactionResponse = $this->submitTransaction($bearerToken, $nik, $verifyData, $account, $documentId, $nikInputId);
 
             $this->info(sprintf(
                 'Transaction for NIK %s succeeded with status %s.',
@@ -96,7 +111,7 @@ class VerifyNikTransactionCommand extends Command
         return $data;
     }
 
-    protected function submitTransaction(string $bearerToken, string $nik, array $verifyData, Account $account): array
+    protected function submitTransaction(string $bearerToken, string $nik, array $verifyData, Account $account, ?int $documentId = null, ?int $nikInputId = null): array
     {
         $formData = [
             'quantity' => '1',
@@ -108,7 +123,7 @@ class VerifyNikTransactionCommand extends Command
             'name' => (string) $verifyData['name'],
             'channelinject' => $verifyData['channelInject'] ?? 'tnp2k',
         ];
-        
+
         $response = $this->postMultipartWithCurl('https://api-map.my-pertamina.id/general/v3/transactions', $formData, [
             'Authorization: Bearer ' . $bearerToken,
             'Accept: */*',
@@ -117,13 +132,25 @@ class VerifyNikTransactionCommand extends Command
             'Connection: keep-alive',
         ]);
 
-        $account->update([
-            'last_nik_input' => $nik,
-            'last_update_api' => now(),
-        ]);
-
         if (($response['code'] ?? null) !== 200 || ($response['status'] ?? null) !== 'OK') {
             throw new RuntimeException(json_encode($response));
+        }
+
+        // Insert into NikInputHistory if document-based input
+        if ($documentId !== null && $nikInputId !== null) {
+            $account->update([
+                'last_nik_input' => $nik,
+                'last_update_api' => now(),
+            ]);
+            
+            NikInputHistory::create([
+                'account_id' => $account->id,
+                'data_master_document_id' => $documentId,
+                'data_nik_input_id' => $nikInputId,
+                'nik' => $nik,
+                'input_date' => now()->toDateString(),
+                'input_month' => now()->format('Y-m'),
+            ]);
         }
 
         usleep(3000000);

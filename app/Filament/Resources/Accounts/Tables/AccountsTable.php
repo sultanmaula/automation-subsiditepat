@@ -160,6 +160,11 @@ class AccountsTable
                                             '3' => '3 Tabung',
                                             '4' => '4 Tabung',
                                             '5' => '5 Tabung',
+                                            '6' => '6 Tabung',
+                                            '7' => '7 Tabung',
+                                            '8' => '8 Tabung',
+                                            '9' => '9 Tabung',
+                                            '10' => '10 Tabung',
                                         ])
                                         ->live()
                                         ->dehydrated(false),
@@ -419,12 +424,19 @@ class AccountsTable
                                         $customerReportId = $customer['customer_report_id'] ?? null;
 
                                         if ($total > 1 && $customerReportId) {
-                                            CancelDuplicateTransactionJob::dispatch(
-                                                $record,
-                                                $customerReportId,
-                                                $startDate,
-                                                $endDate,
-                                            );
+                                            // CancelDuplicateTransactionJob::dispatch(
+                                            //     $record,
+                                            //     $customerReportId,
+                                            //     $startDate,
+                                            //     $endDate,
+                                            // ); 
+
+                                            Artisan::call('merchant:cancel-duplicate', [
+                                                'account' => $record->email,
+                                                'customerReportId' => $customerReportId,
+                                                'startDate' => $startDate,
+                                                '  endDate' => $endDate,
+                                            ]);
                                             $dispatchedCount++;
                                         }
                                     }
@@ -700,13 +712,13 @@ class AccountsTable
                                 $startingOrder = ((int) $lastNikRecord->order) + 1;
                             }
 
-                            $niks = DataNikInput::query()
+                            $nikInputs = DataNikInput::query()
                                 ->where('data_master_document_id', $documentId)
                                 ->where('order', '>=', $startingOrder)
                                 ->orderBy('order')
-                                ->pluck('nik');
+                                ->get(['id', 'nik']);
 
-                            if ($niks->isEmpty()) {
+                            if ($nikInputs->isEmpty()) {
                                 Notification::make()
                                     ->title('Tidak ada NIK yang bisa diproses.')
                                     ->body($isManualNikSelection
@@ -718,10 +730,12 @@ class AccountsTable
                                 return;
                             }
 
-                            foreach ($niks as $nik) {
+                            foreach ($nikInputs as $nikInput) {
                                 $exitCode = Artisan::call('merchant:verify-nik', [
                                     'account' => $record->email,
-                                    'nik' => $nik,
+                                    'nik' => $nikInput->nik,
+                                    '--document-id' => $documentId,
+                                    '--nik-input-id' => $nikInput->id,
                                 ]);
 
                                 if ($exitCode !== Command::SUCCESS) {
@@ -743,7 +757,7 @@ class AccountsTable
                                     }
 
                                     Notification::make()
-                                        ->title("Gagal memproses NIK {$nik}")
+                                        ->title("Gagal memproses NIK {$nikInput->nik}")
                                         ->body($output !== '' ? $output : null)
                                         ->danger()
                                         ->send();
@@ -794,6 +808,7 @@ class AccountsTable
         $queryParams = [
             'startDate' => $start->toDateString(),
             'endDate' => $end->toDateString(),
+            'sort' => 'latest',
         ];
 
         // Add search parameter if provided

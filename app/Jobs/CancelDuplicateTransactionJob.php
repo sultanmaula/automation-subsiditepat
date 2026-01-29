@@ -146,72 +146,42 @@ class CancelDuplicateTransactionJob implements ShouldQueue
     {
         $url = "https://api-map.my-pertamina.id/general/v1/transactions/{$transactionId}/cancel";
 
-        $formData = [
+        $jsonData = [
             'pin' => $this->account->pin,
             'reason' => 'double',
         ];
 
-        $headers = [
-            'Authorization: Bearer ' . $token,
-            'Accept: */*',
-            'User-Agent: PostmanRuntime/7.49.0',
-            'Accept-Encoding: gzip, deflate, br',
-            'Connection: keep-alive',
-        ];
+        try {
+            $response = Http::timeout(60)
+                ->withHeaders([
+                    'Authorization' => 'Bearer ' . $token,
+                ])
+                ->asJson()
+                ->acceptJson()
+                ->post($url, $jsonData);
 
-        $response = $this->postMultipartWithCurl($url, $formData, $headers);
+            $result = $response->json();
 
-        if (($response['code'] ?? null) !== 200 || ($response['status'] ?? null) !== 'OK') {
-            Log::error('CancelDuplicateTransactionJob: Cancel API returned error', [
+            if (($result['code'] ?? null) !== 200 || ($result['status'] ?? null) !== 'OK') {
+                Log::error('CancelDuplicateTransactionJob: Cancel API returned error', [
+                    'transactionId' => $transactionId,
+                    'payload' => $result,
+                ]);
+                return false;
+            }
+
+            Log::info('CancelDuplicateTransactionJob: Transaction canceled successfully', [
                 'transactionId' => $transactionId,
-                'payload' => $response,
+            ]);
+
+            return true;
+
+        } catch (\Exception $e) {
+            Log::error('CancelDuplicateTransactionJob: Exception', [
+                'transactionId' => $transactionId,
+                'error' => $e->getMessage(),
             ]);
             return false;
         }
-
-        Log::info('CancelDuplicateTransactionJob: Transaction canceled successfully', [
-            'transactionId' => $transactionId,
-        ]);
-
-        return true;
-    }
-
-    protected function postMultipartWithCurl(string $url, array $fields, array $headers): array
-    {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_POSTFIELDS => $fields,
-            CURLOPT_TIMEOUT => 60,
-            CURLOPT_ENCODING => '',
-            CURLOPT_FOLLOWLOCATION => true,
-        ]);
-
-        $raw = curl_exec($ch);
-        $error = curl_error($ch);
-        $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
-
-        if ($raw === false) {
-            Log::error('CancelDuplicateTransactionJob: cURL error', [
-                'error' => $error,
-                'url' => $url,
-            ]);
-            return ['code' => 0, 'message' => 'cURL error: ' . $error];
-        }
-
-        $decoded = json_decode($raw, true);
-
-        if (!is_array($decoded)) {
-            Log::error('CancelDuplicateTransactionJob: Unexpected response', [
-                'status' => $status,
-                'raw' => $raw,
-            ]);
-            return ['code' => $status, 'message' => 'Unexpected response'];
-        }
-
-        return $decoded;
     }
 }
