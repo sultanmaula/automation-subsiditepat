@@ -429,13 +429,13 @@ class AccountsTable
                                             //     $customerReportId,
                                             //     $startDate,
                                             //     $endDate,
-                                            // );
+                                            // ); 
 
                                             Artisan::call('merchant:cancel-duplicate', [
                                                 'account' => $record->email,
                                                 'customerReportId' => $customerReportId,
                                                 'startDate' => $startDate,
-                                                'endDate' => $endDate,
+                                                '  endDate' => $endDate,
                                             ]);
                                             $dispatchedCount++;
                                         }
