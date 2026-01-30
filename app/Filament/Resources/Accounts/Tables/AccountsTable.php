@@ -435,7 +435,7 @@ class AccountsTable
                                                 'account' => $record->email,
                                                 'customerReportId' => $customerReportId,
                                                 'startDate' => $startDate,
-                                                '  endDate' => $endDate,
+                                                'endDate' => $endDate,
                                             ]);
                                             $dispatchedCount++;
                                         }
