@@ -45,7 +45,7 @@ class VerifyNikTransactionCommand extends Command
          * Add validation Daily Limit
          */
         $dailyLimit = 200;
-        $inputToday = $account->nikInputHistories()->where('input_date', now()->toDateString())->count();
+        $inputToday = $account->nikInputHistories()->where('is_failed', false)->where('input_date', now()->toDateString())->count();
         if ($inputToday >= $dailyLimit) {
             return Command::SUCCESS;
         }
@@ -132,10 +132,6 @@ class VerifyNikTransactionCommand extends Command
             'Connection: keep-alive',
         ]);
 
-        if (($response['code'] ?? null) !== 200 || ($response['status'] ?? null) !== 'OK') {
-            throw new RuntimeException(json_encode($response));
-        }
-
         // Insert into NikInputHistory if document-based input
         if ($documentId !== null && $nikInputId !== null) {
             $account->update([
@@ -143,7 +139,7 @@ class VerifyNikTransactionCommand extends Command
                 'last_update_api' => now(),
             ]);
             
-            NikInputHistory::create([
+            $nikInputHistory = NikInputHistory::create([
                 'account_id' => $account->id,
                 'data_master_document_id' => $documentId,
                 'data_nik_input_id' => $nikInputId,
@@ -151,6 +147,16 @@ class VerifyNikTransactionCommand extends Command
                 'input_date' => now()->toDateString(),
                 'input_month' => now()->format('Y-m'),
             ]);
+        }
+
+        if (($response['code'] ?? null) !== 200 || ($response['status'] ?? null) !== 'OK') {
+            $nikInputHistory->update([
+                'is_failed' => true,
+            ]);
+
+            $nikInputHistory->save();
+
+            throw new RuntimeException(json_encode($response));
         }
 
         usleep(3000000);

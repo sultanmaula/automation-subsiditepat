@@ -94,7 +94,7 @@ class ListAccounts extends ListRecords
         foreach ($grouped as $accountHistories) {
             $account = $accountHistories->first()->account;
             $accountName = $account?->email ?? 'Unknown';
-            $totalInput = $accountHistories->count();
+            $totalInput = $accountHistories->where('is_failed', false)->count();
             $lastInputTime = $accountHistories->first()->created_at?->format('H:i') ?? '-';
 
             $output .= '<div class="mb-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">';
@@ -115,6 +115,7 @@ class ListAccounts extends ListRecords
                 $totalNiksInDocument = DataNikInput::where('data_master_document_id', $documentId)->count();
                 $totalInputsForDocument = NikInputHistory::where('account_id', $lastHistory->account_id)
                     ->where('data_master_document_id', $documentId)
+                    ->where('input_month', $targetDate->format('Y-m'))
                     ->count();
 
                 $rotation = $totalNiksInDocument > 0
