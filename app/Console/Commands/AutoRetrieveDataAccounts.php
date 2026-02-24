@@ -51,11 +51,6 @@ class AutoRetrieveDataAccounts extends Command
 
                 $stockAvailable = $data['stockAvailable'];
                 if ($stockAvailable > 0) {
-                    WhatsAppService::send(
-                        '6285231731037',
-                        WhatsAppService::reminderStock($account->email, $stockAvailable)
-                    );
-
                     $documentId = 5;
                     $lastNikValue = $account->last_nik_input;
 

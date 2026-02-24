@@ -20,6 +20,8 @@ class AccountForm
                 TextInput::make('pin')
                     ->numeric()
                     ->required(),
+                TextInput::make('phone')
+                    ->numeric(),
                 TextEntry::make('bearerToken')
                     ->visibleOn('view')
                     ->placeholder('-')

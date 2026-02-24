@@ -3,12 +3,15 @@
 namespace App\Filament\Resources\Accounts\Pages;
 
 use App\Filament\Resources\Accounts\AccountResource;
+use App\Models\Account;
 use App\Models\DataNikInput;
 use App\Models\NikInputHistory;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Placeholder;
+use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Artisan;
 use Filament\Schemas\Components\Actions;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
@@ -24,6 +27,30 @@ class ListAccounts extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('sendReminder')
+                ->label('Kirim Reminder Manual')
+                ->icon('heroicon-o-bell-alert')
+                ->color('warning')
+                ->requiresConfirmation()
+                ->modalHeading('Kirim Reminder Stok')
+                ->modalDescription('Kirim notifikasi reminder stok ke semua akun?')
+                ->action(function () {
+                    $accounts = Account::all();
+                    $count = 0;
+
+                    foreach ($accounts as $account) {
+                        Artisan::call('account:auto-send-reminder', [
+                            'account' => $account->id,
+                        ]);
+                        $count++;
+                    }
+
+                    Notification::make()
+                        ->title('Reminder terkirim')
+                        ->body("Berhasil mengirim reminder ke {$count} akun.")
+                        ->success()
+                        ->send();
+                }),
             Action::make('todayRecap')
                 ->label('Rekap Input')
                 ->icon('heroicon-o-clipboard-document-list')
@@ -63,6 +90,22 @@ class ListAccounts extends ListRecords
                             }),
                     ])->fullWidth(),
                 ]),
+            Action::make('sendDailyRecap')
+                ->label('Kirim Rekap Harian')
+                ->icon('heroicon-o-paper-airplane')
+                ->color('success')
+                ->requiresConfirmation()
+                ->modalHeading('Kirim Rekap Harian')
+                ->modalDescription('Kirim rekapan harian total transaksi semua akun via WhatsApp?')
+                ->action(function () {
+                    Artisan::call('account:daily-recap');
+
+                    Notification::make()
+                        ->title('Rekap harian terkirim')
+                        ->body(trim(Artisan::output()))
+                        ->success()
+                        ->send();
+                }),
             CreateAction::make(),
         ];
     }
