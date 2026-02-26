@@ -38,7 +38,7 @@ class WhatsAppService
         return $message;
     }
 
-    public static function dailyRecap(array $recapItems, int $totalAllQuantity)
+    public static function dailyRecap(array $recapItems, int $totalAllQuantity, array $overLimitCustomers = [])
     {
         $message = "📊 *REKAPAN HARIAN*\n"
                 . "📅 " . now()->format('d M Y') . "\n"
@@ -46,10 +46,14 @@ class WhatsAppService
 
         foreach ($recapItems as $i => $item) {
             $no = $i + 1;
+            $dobelText = ($item['overLimitCount'] ?? 0) > 0
+                ? "{$item['overLimitCount']} orang"
+                : 'Tidak ada';
             $message .= "*{$no}. {$item['storeName']}*\n"
                     . "```"
                     . "Email      : {$item['email']}\n"
                     . "Sisa Stock : {$item['stockAvailable']}\n"
+                    . "Input >2x  : {$dobelText}\n"
                     . "Input      : {$item['totalQuantity']}\n"
                     . "Status     : {$item['status']}\n"
                     . "```\n";
@@ -57,9 +61,80 @@ class WhatsAppService
 
         $message .= "━━━━━━━━━━━━━━━━━━\n"
                 . "📦 *Total Input Hari Ini: {$totalAllQuantity} tabung*\n"
-                . "📋 *Total Account: " . count($recapItems) . "*\n\n"
-                . "⏰ Waktu: " . now()->format('d M Y H:i') . " WIB\n\n"
+                . "📋 *Total Akun: " . count($recapItems) . "*\n\n";
+
+        if (!empty($overLimitCustomers)) {
+            $message .= "━━━━━━━━━━━━━━━━━━\n"
+                    . "🚨 *PERHATIAN!*\n"
+                    . "👥 Ditemukan akun yang input *lebih dari 2x* hari ini:\n";
+
+            foreach ($overLimitCustomers as $storeName => $grouped) {
+                $message .= "\n🏪 *{$storeName}*\n```";
+                foreach ($grouped as $total => $count) {
+                    $message .= "Input {$total}x = {$count} orang\n";
+                }
+                $message .= "```";
+            }
+
+            $message .= "\n━━━━━━━━━━━━━━━━━━\n";
+        } else {
+            $message .= "✅ *Tidak ada input lebih dari 2x hari ini*\n\n";
+        }
+
+        $message .= "⏰ Waktu: " . now()->format('d M Y H:i') . " WIB\n\n"
                 . "_Rekapan otomatis dari sistem Automation LPG_ 🤖";
+
+        return $message;
+    }
+
+    public static function monthlyRecap(array $recapItems, int $totalAllQuantity, string $startDate, string $endDate, array $overLimitCustomers = [])
+    {
+        $periodStart = \Carbon\Carbon::parse($startDate)->format('d M Y');
+        $periodEnd = \Carbon\Carbon::parse($endDate)->format('d M Y');
+
+        $message = "📊 *REKAPAN BULANAN*\n"
+                . "📅 Periode: {$periodStart} - {$periodEnd}\n"
+                . "━━━━━━━━━━━━━━━━━━\n\n";
+
+        foreach ($recapItems as $i => $item) {
+            $no = $i + 1;
+            $dobelText = $item['overLimitCount'] > 0
+                ? "{$item['overLimitCount']} orang"
+                : 'Tidak ada';
+            $message .= "*{$no}. {$item['storeName']}*\n"
+                    . "```"
+                    . "Email      : {$item['email']}\n"
+                    . "Input >4x  : {$dobelText}\n"
+                    . "Total Input: {$item['totalQuantity']}\n"
+                    . "Status     : {$item['status']}\n"
+                    . "```\n";
+        }
+
+        $message .= "━━━━━━━━━━━━━━━━━━\n"
+                . "📦 *Total Input Bulan Ini: {$totalAllQuantity} tabung*\n"
+                . "📋 *Total Akun: " . count($recapItems) . "*\n\n";
+
+        // Bagian customer yang input > 4x
+        if (!empty($overLimitCustomers)) {
+            $message .= "━━━━━━━━━━━━━━━━━━\n"
+                    . "🚨 *PERHATIAN!*\n"
+                    . "👥 Ditemukan akun yang input *lebih dari 4x* bulan ini:\n";
+
+            foreach ($overLimitCustomers as $storeName => $grouped) {
+                $message .= "\n🏪 *{$storeName}*\n```";
+                foreach ($grouped as $total => $count) {
+                    $message .= "Input {$total}x = {$count} orang\n";
+                }
+                $message .= "```";
+            }
+
+            $message .= "\n━━━━━━━━━━━━━━━━━━\n";
+        } else {
+            $message .= "✅ *Tidak ada dobel input (>4x) bulan ini*\n\n";
+        }
+
+        $message .= "⏰ Waktu: " . now()->format('d M Y H:i') . " WIB\n\n"
+                . "_Rekapan bulanan otomatis dari sistem Automation LPG_ 🤖";
 
         return $message;
     }

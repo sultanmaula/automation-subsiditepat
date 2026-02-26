@@ -9,21 +9,21 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
-class AutoSendDailyRecap extends Command
+class AutoSendMonthlyRecap extends Command
 {
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'account:daily-recap';
+    protected $signature = 'account:monthly-recap';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Kirim rekapan harian total transaksi semua accounts via WhatsApp';
+    protected $description = 'Kirim rekapan bulanan total transaksi semua accounts via WhatsApp';
 
     /**
      * Execute the console command.
@@ -40,7 +40,9 @@ class AutoSendDailyRecap extends Command
         $recapItems = [];
         $totalAllQuantity = 0;
         $overLimitCustomers = [];
-        $today = now()->format('Y-m-d');
+
+        $startDate = now()->startOfMonth()->format('Y-m-d');
+        $endDate = now()->format('Y-m-d');
 
         foreach ($accounts as $account) {
             if (!Cache::get("merchant_api_token_{$account->email}")) {
@@ -56,7 +58,7 @@ class AutoSendDailyRecap extends Command
                 $recapItems[] = [
                     'email'          => $account->email,
                     'storeName'      => '-',
-                    'stockAvailable' => 0,
+                    'overLimitCount' => 0,
                     'totalQuantity'  => 0,
                     'status'         => 'Token gagal',
                 ];
@@ -78,8 +80,8 @@ class AutoSendDailyRecap extends Command
             $resTransaction = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $token,
             ])->get('https://api-map.my-pertamina.id/general/transactions/v1/summary', [
-                'startDate' => $today,
-                'endDate'   => $today,
+                'startDate' => $startDate,
+                'endDate'   => $endDate,
             ]);
 
             $totalQuantity = 0;
@@ -89,24 +91,24 @@ class AutoSendDailyRecap extends Command
 
             $totalAllQuantity += $totalQuantity;
 
-            // Fetch report harian untuk deteksi customer > 2x input hari ini
+            // Fetch report bulanan untuk deteksi customer > 4x input dalam sebulan
             $overLimitCount = 0;
-            $overLimitGrouped = [];
+            $overLimitGrouped = []; // total => jumlah orang
 
             $resReport = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $token,
             ])->get('https://api-map.my-pertamina.id/general/v3/transactions/report', [
                 'search'    => '',
                 'sort'      => 'latest',
-                'startDate' => $today,
-                'endDate'   => $today,
+                'startDate' => $startDate,
+                'endDate'   => $endDate,
             ]);
 
             if ($resReport->successful() && ($resReport['success'] ?? false)) {
                 $customers = $resReport['data']['customersReport'] ?? [];
 
                 foreach ($customers as $customer) {
-                    if (($customer['total'] ?? 0) > 2) {
+                    if (($customer['total'] ?? 0) > 4) {
                         $total = $customer['total'];
                         $overLimitGrouped[$total] = ($overLimitGrouped[$total] ?? 0) + 1;
                         $overLimitCount++;
@@ -122,24 +124,23 @@ class AutoSendDailyRecap extends Command
             $recapItems[] = [
                 'email'          => $account->email,
                 'storeName'      => $storeName,
-                'stockAvailable' => $stockAvailable,
-                'totalQuantity'  => $totalQuantity,
                 'overLimitCount' => $overLimitCount,
-                'status'         => ($stockAvailable > 0 && $totalQuantity < 200) ? 'Belum Tuntas' : 'Tuntas',
+                'totalQuantity'  => $totalQuantity,
+                'status'         => $overLimitCount > 0 ? 'Belum Tuntas' : 'Tuntas',
             ];
         }
 
         $phones = [
             '6285231731037', // Sultan
-            '6285745219894', // Mama Luluk
-            '6285704231663', // Istri
+            // '6285745219894', // Mama Luluk
+            // '6285704231663', // Istri
         ];
 
-        $message = WhatsAppService::dailyRecap($recapItems, $totalAllQuantity, $overLimitCustomers);
+        $message = WhatsAppService::monthlyRecap($recapItems, $totalAllQuantity, $startDate, $endDate, $overLimitCustomers);
 
         foreach ($phones as $phone) {
             WhatsAppService::send($phone, $message);
-            $this->info('Rekapan harian berhasil dikirim ke ' . $phone);
+            $this->info('Rekapan bulanan berhasil dikirim ke ' . $phone);
         }
     }
 }
