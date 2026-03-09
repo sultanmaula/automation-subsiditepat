@@ -9,7 +9,7 @@ use App\Models\Account;
 
 class FetchMerchantToken extends Command
 {
-    protected $signature = 'merchant:fetch-token {--email=} {--pin=}';
+    protected $signature = 'merchant:fetch-token {--email=} {--pin=} {--screenshot}';
     protected $description = 'Fetch bearer token via Puppeteer';
 
     public function handle()
@@ -37,6 +37,8 @@ class FetchMerchantToken extends Command
             'HOME' => env('PUPPETEER_HOME', '/var/www'),
             'PUPPETEER_CACHE_DIR' => env('PUPPETEER_CACHE_DIR', base_path('.cache/puppeteer')),
             'PUPPETEER_EXECUTABLE_PATH' => env('PUPPETEER_EXECUTABLE_PATH', '/usr/bin/chromium'),
+            'SCREENSHOT' => $this->option('screenshot') ? '1' : '0',
+            'SCREENSHOT_DIR' => storage_path('app/screenshots'),
         ];
 
         $process = new Process([$node, $script], base_path('scripts'), $env);
@@ -49,6 +51,11 @@ class FetchMerchantToken extends Command
         if (!empty($data['token'])) {
             Cache::put('merchant_api_token_'.$email, $data['token'], now()->addMinutes(10));
             Account::where('email', $email)->update(['last_update_api' => now()]);
+
+            if ($this->option('screenshot') && !empty($data['screenshot'])) {
+                Cache::put('merchant_screenshot_'.$email, $data['screenshot'], now()->addMinutes(30));
+                $this->info("Screenshot saved: {$data['screenshot']}");
+            }
 
             $this->info('Token saved to cache.');
             return Command::SUCCESS;

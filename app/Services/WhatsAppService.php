@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class WhatsAppService
 {
@@ -12,6 +13,26 @@ class WhatsAppService
             'number' => $number,
             'message' => $message,
         ]);
+    }
+
+    public static function sendImage(string $number, string $imagePath, string $caption = ''): void
+    {
+        $url = env('WHATSAPP_IMAGE_ENDPOINT', 'http://host.docker.internal:3001/send-image');
+
+        $response = Http::attach('image', file_get_contents($imagePath), basename($imagePath))
+            ->post($url, [
+                'number' => $number,
+                'caption' => $caption,
+            ]);
+
+        if ($response->failed()) {
+            Log::error('[WhatsApp] sendImage failed', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'url' => $url,
+                'number' => $number,
+            ]);
+        }
     }
 
     public static function reminderStock($name, $email, $stockAvailable, $inputToday)

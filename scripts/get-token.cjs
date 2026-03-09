@@ -4,6 +4,24 @@ const puppeteer = require('puppeteer');
 
 function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
+async function takeScreenshotIfEnabled(page) {
+  if (process.env.SCREENSHOT !== '1') return null;
+  const fs = require('fs');
+  const path = require('path');
+  // Navigasi ke halaman Atur Stok & Harga sebelum screenshot
+  const manageProductUrl = 'https://subsiditepatlpg.mypertamina.id/merchant/app/manage-product';
+  await page.goto(manageProductUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+  await page.waitForNetworkIdle({ idleTime: 1000, timeout: 10000 }).catch(() => {});
+  await sleep(1000);
+  const dir = process.env.SCREENSHOT_DIR || './screenshots';
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const email = (process.env.AUTH_EMAIL || 'unknown').replace(/[^a-zA-Z0-9]/g, '_');
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const filePath = path.join(dir, `screenshot_${email}_${ts}.png`);
+  await page.screenshot({ path: filePath, fullPage: true });
+  return filePath;
+}
+
 function buildSubmitTextHints(selector) {
   const hints = [];
   const explicit = (process.env.SEL_SUBMIT_TEXT || '').trim();
@@ -98,9 +116,17 @@ async function clickSubmitButton(page, selector, debug = false) {
 
   try {
     const page = await browser.newPage();
-    await page.setUserAgent(
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-    );
+    const SCREENSHOT = process.env.SCREENSHOT === '1';
+    if (SCREENSHOT) {
+      await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+      await page.setUserAgent(
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
+      );
+    } else {
+      await page.setUserAgent(
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+      );
+    }
 
     // 0) Hook fetch & XHR SEBELUM halaman load, supaya semua request ketangkep
     await page.evaluateOnNewDocument(() => {
@@ -156,7 +182,8 @@ async function clickSubmitButton(page, selector, debug = false) {
         const token = String(raw).replace(/^Bearer\s+/i, '').trim();
         if (token) {
           foundToken = token;
-          console.log(JSON.stringify({ token }));
+          const ssPath = await takeScreenshotIfEnabled(page);
+          console.log(JSON.stringify({ token, screenshot: ssPath || null }));
           try { await browser.close(); } catch {}
           process.exit(0);
         }
@@ -226,7 +253,8 @@ async function clickSubmitButton(page, selector, debug = false) {
       if (rawToken) {
         foundToken = rawToken.replace(/^Bearer\s+/i, '').trim();
         if (foundToken) {
-          console.log(JSON.stringify({ token: foundToken }));
+          const ssPath = await takeScreenshotIfEnabled(page);
+          console.log(JSON.stringify({ token: foundToken, screenshot: ssPath || null }));
           try { await browser.close(); } catch {}
           process.exit(0);
         }
@@ -254,7 +282,9 @@ async function clickSubmitButton(page, selector, debug = false) {
       if (DEBUG) console.error(`[STORAGE_CANDIDATES] ${JSON.stringify(tokenMaybe)}`);
       const jwtLike = (tokenMaybe || []).map(String).find(s => /eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/.test(s));
       if (jwtLike) {
-        console.log(JSON.stringify({ token: jwtLike }));
+        foundToken = jwtLike;
+        const ssPath = await takeScreenshotIfEnabled(page);
+        console.log(JSON.stringify({ token: jwtLike, screenshot: ssPath || null }));
         try { await browser.close(); } catch {}
         process.exit(0);
       }
@@ -271,7 +301,9 @@ async function clickSubmitButton(page, selector, debug = false) {
         if (fromCookies) {
           const normalized = String(fromCookies).replace(/^Bearer\s+/i, '').trim();
           if (normalized) {
-            console.log(JSON.stringify({ token: normalized }));
+            foundToken = normalized;
+            const ssPath = await takeScreenshotIfEnabled(page);
+            console.log(JSON.stringify({ token: normalized, screenshot: ssPath || null }));
             try { await browser.close(); } catch {}
             process.exit(0);
           }

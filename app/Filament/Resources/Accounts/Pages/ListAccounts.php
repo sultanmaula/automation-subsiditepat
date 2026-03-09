@@ -106,6 +106,22 @@ class ListAccounts extends ListRecords
                         ->success()
                         ->send();
                 }),
+            Action::make('sendScreenshot')
+                ->label('Screenshot Semua Akun')
+                ->icon('heroicon-o-camera')
+                ->color('gray')
+                ->requiresConfirmation()
+                ->modalHeading('Screenshot & Kirim ke WhatsApp')
+                ->modalDescription('Screenshot halaman login semua akun dan kirim ke nomor WhatsApp.')
+                ->action(function () {
+                    Artisan::call('merchant:send-screenshot');
+
+                    Notification::make()
+                        ->title('Screenshot selesai')
+                        ->body(trim(Artisan::output()))
+                        ->success()
+                        ->send();
+                }),
             CreateAction::make(),
         ];
     }
