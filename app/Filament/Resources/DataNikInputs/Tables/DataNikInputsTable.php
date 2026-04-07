@@ -2,12 +2,14 @@
 
 namespace App\Filament\Resources\DataNikInputs\Tables;
 
+use App\Models\DataMasterDocument;
 use App\Models\DataNikInput;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Support\Str;
 
@@ -38,8 +40,17 @@ class DataNikInputsTable
                     ->searchable()
                     ->placeholder('-'),
             ])
+            ->deferFilters(false)
             ->filters([
-                //
+                SelectFilter::make('data_master_document_id')
+                    ->label('Document')
+                    ->options(
+                        DataMasterDocument::query()
+                            ->pluck('original_name', 'id')
+                            ->toArray()
+                    )
+                    ->searchable()
+                    ->placeholder('All Documents'),
             ])
             ->recordActions([
                 EditAction::make()->slideOver(),
