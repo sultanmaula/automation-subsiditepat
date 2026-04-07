@@ -787,7 +787,7 @@ class AccountsTable
                     DeleteBulkAction::make(),
                 ]),
             ])
-            ->poll('5s');
+            ->poll('1s');
     }
 
     protected static function fetchSalesReportData(Account $record, Carbon $start, Carbon $end, ?string $search = null): array

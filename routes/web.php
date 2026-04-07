@@ -1,6 +1,7 @@
 <?php
 
 use App\Filament\Auth\Pages\Login;
+use App\Http\Controllers\NikInputController;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Route;
 
@@ -19,3 +20,5 @@ Route::get('/', function () {
 Route::get('/login', Login::class)
     ->middleware(Filament::getPanel('lpg')->getMiddleware())
     ->name('login');
+
+Route::get('/nik-input', [NikInputController::class, 'deleteLastMonthApi']);

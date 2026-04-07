@@ -12,6 +12,7 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Placeholder;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Artisan;
+use App\Http\Controllers\NikInputController;
 use Filament\Schemas\Components\Actions;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
@@ -27,35 +28,35 @@ class ListAccounts extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
-            Action::make('sendReminder')
-                ->label('Kirim Reminder Manual')
-                ->icon('heroicon-o-bell-alert')
-                ->color('warning')
-                ->requiresConfirmation()
-                ->modalHeading('Kirim Reminder Stok')
-                ->modalDescription('Kirim notifikasi reminder stok ke semua akun?')
-                ->action(function () {
-                    $accounts = Account::all();
-                    $count = 0;
+            // Action::make('sendReminder')
+            //     ->label('Kirim Reminder Manual')
+            //     ->icon('heroicon-o-bell-alert')
+            //     ->color('warning')
+            //     ->requiresConfirmation()
+            //     ->modalHeading('Kirim Reminder Stok')
+            //     ->modalDescription('Kirim notifikasi reminder stok ke semua akun?')
+            //     ->action(function () {
+            //         $accounts = Account::all();
+            //         $count = 0;
 
-                    foreach ($accounts as $account) {
-                        Artisan::call('account:auto-send-reminder', [
-                            'account' => $account->id,
-                        ]);
-                        $count++;
-                    }
+            //         foreach ($accounts as $account) {
+            //             Artisan::call('account:auto-send-reminder', [
+            //                 'account' => $account->id,
+            //             ]);
+            //             $count++;
+            //         }
 
-                    Notification::make()
-                        ->title('Reminder terkirim')
-                        ->body("Berhasil mengirim reminder ke {$count} akun.")
-                        ->success()
-                        ->send();
-                }),
+            //         Notification::make()
+            //             ->title('Reminder terkirim')
+            //             ->body("Berhasil mengirim reminder ke {$count} akun.")
+            //             ->success()
+            //             ->send();
+            //     }),
             Action::make('todayRecap')
-                ->label('Rekap Input')
+                ->label('Input Recap')
                 ->icon('heroicon-o-clipboard-document-list')
                 ->color('info')
-                ->modalHeading('Rekap Input')
+                ->modalHeading('Input Recap')
                 ->modalWidth('2xl')
                 ->modalSubmitAction(false)
                 ->modalCancelAction(false)
@@ -63,7 +64,7 @@ class ListAccounts extends ListRecords
                     Section::make('Filter Tanggal')
                         ->schema([
                             DatePicker::make('recap_date')
-                                ->label('Pilih Tanggal')
+                                ->label('Select Date')
                                 ->default(today())
                                 ->native(false)
                                 ->displayFormat('d/m/Y')
@@ -90,35 +91,35 @@ class ListAccounts extends ListRecords
                             }),
                     ])->fullWidth(),
                 ]),
-            Action::make('sendDailyRecap')
-                ->label('Kirim Rekap Harian')
-                ->icon('heroicon-o-paper-airplane')
-                ->color('success')
+            // Action::make('sendDailyRecap')
+            //     ->label('Kirim Rekap Harian')
+            //     ->icon('heroicon-o-paper-airplane')
+            //     ->color('success')
+            //     ->requiresConfirmation()
+            //     ->modalHeading('Kirim Rekap Harian')
+            //     ->modalDescription('Kirim rekapan harian total transaksi semua akun via WhatsApp?')
+            //     ->action(function () {
+            //         Artisan::call('account:daily-recap');
+
+            //         Notification::make()
+            //             ->title('Rekap harian terkirim')
+            //             ->body(trim(Artisan::output()))
+            //             ->success()
+            //             ->send();
+            //     }),
+            Action::make('deleteNikInput')
+                ->label('Delete Data')
+                ->icon('heroicon-o-trash')
+                ->color('danger')
                 ->requiresConfirmation()
-                ->modalHeading('Kirim Rekap Harian')
-                ->modalDescription('Kirim rekapan harian total transaksi semua akun via WhatsApp?')
+                ->modalHeading('Delete Data Last Month')
+                ->modalDescription('Delete all data last month from the system?')
                 ->action(function () {
-                    Artisan::call('account:daily-recap');
+                    $result = (new NikInputController)->deleteLastMonth();
 
                     Notification::make()
-                        ->title('Rekap harian terkirim')
-                        ->body(trim(Artisan::output()))
-                        ->success()
-                        ->send();
-                }),
-            Action::make('sendScreenshot')
-                ->label('Screenshot Semua Akun')
-                ->icon('heroicon-o-camera')
-                ->color('gray')
-                ->requiresConfirmation()
-                ->modalHeading('Screenshot & Kirim ke WhatsApp')
-                ->modalDescription('Screenshot halaman login semua akun dan kirim ke nomor WhatsApp.')
-                ->action(function () {
-                    Artisan::call('merchant:send-screenshot');
-
-                    Notification::make()
-                        ->title('Screenshot selesai')
-                        ->body(trim(Artisan::output()))
+                        ->title('Data berhasil dihapus')
+                        ->body($result['message'])
                         ->success()
                         ->send();
                 }),
@@ -144,7 +145,7 @@ class ListAccounts extends ListRecords
 
         if ($histories->isEmpty()) {
             $dateFormatted = $targetDate->format('d-m-Y');
-            return new HtmlString('<p class="text-gray-500 italic">Belum ada input pada tanggal ' . $dateFormatted . '.</p>');
+            return new HtmlString('<p class="text-gray-500 italic">No input on ' . $dateFormatted . '.</p>');
         }
 
         $grouped = $histories->groupBy('account_id');

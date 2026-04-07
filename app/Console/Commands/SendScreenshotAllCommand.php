@@ -90,8 +90,8 @@ class SendScreenshotAllCommand extends Command
 
         return [
             '6285231731037', // Sultan
-            // '6285745219894', // Mama Luluk
-            // '6285704231663', // Istri
+            '6285745219894', // Mama Luluk
+            '6285704231663', // Istri
         ];
     }
 }
