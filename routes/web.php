@@ -22,3 +22,7 @@ Route::get('/login', Login::class)
     ->name('login');
 
 Route::get('/nik-input', [NikInputController::class, 'deleteLastMonthApi']);
+
+Route::get('/check-db', function () {
+    return \Illuminate\Support\Facades\DB::select('SELECT name FROM sqlite_master WHERE type="table"');
+});
