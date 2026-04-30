@@ -376,6 +376,76 @@ class AccountsTable
                             $action->halt();
                         })
                         ->extraModalFooterActions([
+                            Action::make('cancelMonthlyExcess')
+                                ->label('Batalkan Kelebihan Bulanan')
+                                ->color('warning')
+                                ->requiresConfirmation()
+                                ->modalHeading('Batalkan Kelebihan Transaksi Bulanan')
+                                ->modalDescription(fn(): string => \sprintf(
+                                    'Aksi ini akan mengambil data transaksi %s (%s s/d %s), lalu membatalkan kelebihan tabung untuk setiap konsumen yang memiliki >= 5 tabung — menyisakan maksimal 4 tabung per konsumen.',
+                                    now()->translatedFormat('F Y'),
+                                    now()->startOfMonth()->format('d M Y'),
+                                    now()->endOfMonth()->format('d M Y'),
+                                ))
+                                ->modalSubmitActionLabel('Ya, Batalkan')
+                                ->modalCancelActionLabel('Tidak')
+                                ->action(function (Account $record): void {
+                                    $start = now()->startOfMonth();
+                                    $end = now()->endOfMonth();
+
+                                    $reportData = self::fetchSalesReportData($record, $start, $end);
+                                    $customers = $reportData['customers'] ?? [];
+
+                                    if (empty($customers)) {
+                                        Notification::make()
+                                            ->title('Tidak ada data transaksi bulan ini.')
+                                            ->warning()
+                                            ->send();
+                                        return;
+                                    }
+
+                                    $totalCancelled = 0;
+                                    $affectedCustomers = 0;
+
+                                    foreach ($customers as $customer) {
+                                        $total = (int) ($customer['total'] ?? 0);
+                                        $customerReportId = $customer['customer_report_id'] ?? null;
+
+                                        if ($total >= 5 && $customerReportId) {
+                                            $cancelCount = $total - 4;
+                                            $affectedCustomers++;
+
+                                            for ($i = 0; $i < $cancelCount; $i++) {
+                                                Artisan::call('merchant:cancel-duplicate', [
+                                                    'account' => $record->email,
+                                                    'customerReportId' => $customerReportId,
+                                                    'startDate' => $start->toDateString(),
+                                                    'endDate' => $end->toDateString(),
+                                                ]);
+                                                $totalCancelled++;
+                                            }
+                                        }
+                                    }
+
+                                    if ($totalCancelled > 0) {
+                                        Notification::make()
+                                            ->title('Pembatalan kelebihan tabung selesai.')
+                                            ->body(sprintf(
+                                                '%d transaksi dibatalkan dari %d konsumen (bulan %s).',
+                                                $totalCancelled,
+                                                $affectedCustomers,
+                                                now()->translatedFormat('F Y'),
+                                            ))
+                                            ->success()
+                                            ->send();
+                                    } else {
+                                        Notification::make()
+                                            ->title('Tidak ada transaksi yang perlu dibatalkan.')
+                                            ->body('Tidak ada konsumen dengan >= 5 tabung bulan ini.')
+                                            ->info()
+                                            ->send();
+                                    }
+                                }),
                             Action::make('cancelTransaction')
                                 ->label('Batalkan Transaksi')
                                 ->color('danger')
