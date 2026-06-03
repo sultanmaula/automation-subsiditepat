@@ -36,16 +36,19 @@ class FetchMerchantToken extends Command
             'NODE_ENV'   => 'production',
             'HOME' => env('PUPPETEER_HOME', '/var/www'),
             'PUPPETEER_CACHE_DIR' => env('PUPPETEER_CACHE_DIR', base_path('.cache/puppeteer')),
-            'PUPPETEER_EXECUTABLE_PATH' => env('PUPPETEER_EXECUTABLE_PATH', '/usr/bin/chromium'),
             'SCREENSHOT' => $this->option('screenshot') ? '1' : '0',
             'SCREENSHOT_DIR' => storage_path('app/screenshots'),
         ];
+
+        if ($execPath = env('PUPPETEER_EXECUTABLE_PATH')) {
+            $env['PUPPETEER_EXECUTABLE_PATH'] = $execPath;
+        }
 
         $process = new Process([$node, $script], base_path('scripts'), $env);
         $process->setTimeout(120);
         $process->run();
 
-        $out = $process->getOutput() ?? $process->getErrorOutput();
+        $out = $process->getOutput() ?: $process->getErrorOutput();
         $data = json_decode(trim($out), true);
 
         if (!empty($data['token'])) {

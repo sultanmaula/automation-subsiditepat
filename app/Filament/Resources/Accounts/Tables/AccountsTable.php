@@ -34,6 +34,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\HtmlString;
+use Illuminate\Support\Facades\Log;
 use Livewire\Component as LivewireComponent;
 use Throwable;
 
@@ -549,16 +550,26 @@ class AccountsTable
                                 ->disabled(),
                         ])
                         ->beforeFormFilled(function (Action $action, Account $record): void {
-                            if (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL)
-                                Artisan::call('merchant:fetch-token', [
+                            $tokenBefore = Cache::get("merchant_api_token_{$record->email}");
+                            Log::debug('[InfoAccount] token in cache before fetch: ' . ($tokenBefore ? 'YES ('.strlen($tokenBefore).' chars)' : 'NO'));
+
+                            if (!$tokenBefore) {
+                                $exitCode = Artisan::call('merchant:fetch-token', [
                                     '--email' => $record->email,
                                     '--pin' => $record->pin,
                                 ]);
+                                $artisanOutput = Artisan::output();
+                                Log::debug('[InfoAccount] artisan exit code: ' . $exitCode . ', output: ' . $artisanOutput);
+                            }
 
                             $token = Cache::get("merchant_api_token_{$record->email}");
+                            Log::debug('[InfoAccount] token in cache after fetch: ' . ($token ? 'YES ('.strlen($token).' chars)' : 'NO'));
+
                             $res = Http::withHeaders([
                                 'Authorization' => 'Bearer ' . $token,
                             ])->get('https://api-map.my-pertamina.id/general/products/v1/products/user');
+
+                            Log::debug('[InfoAccount] API status: ' . $res->status() . ', body: ' . $res->body());
 
                             if ($res->successful() && $res['code'] == 200 && $res['status'] == 'OK') {
                                 $data = $res['data'];
