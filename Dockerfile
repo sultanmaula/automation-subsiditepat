@@ -17,37 +17,63 @@ RUN --mount=type=cache,target=/var/cache/apt \
   libgtk-3-0 libnss3 libxcomposite1 libxdamage1 libxfixes3 libxcb1 libxrandr2 \
   libgbm1 libpango-1.0-0 libcairo2 \
   fonts-liberation \
+  nginx \
+  supervisor \
   && rm -rf /var/lib/apt/lists/*
 
 # Composer binary from official image
 COPY --from=composer /usr/bin/composer /usr/bin/composer
 
-# 2) Ekstensi: GD perlu flags; intl perlu libicu-dev; zip perlu libzip-dev
+# 2) Ekstensi PHP
 RUN docker-php-ext-configure gd --with-jpeg --with-freetype \
   && docker-php-ext-install -j$(nproc) \
   gd exif opcache pdo_mysql pdo_pgsql pgsql pcntl zip mysqli gmp bcmath intl
 
-# 3) Redis via PECL (butuh autoconf/make dari build-essential)
+# 3) Redis via PECL
 RUN pecl install redis && docker-php-ext-enable redis
 
-# (Opsional) Node.js LTS, kalau perlunode /var/www/html/scripts/get-token.js
+# 4) Node.js LTS
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
   && apt-get update && apt-get install -y --no-install-recommends nodejs \
   && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# opsional: install puppeteer sekali (global atau di /var/www/html/scripts)
-WORKDIR /var/www/html/scripts
-RUN npm init -y && npm i puppeteer
+# 5) Setup supervisor config
+COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-WORKDIR /var/www/html
+# 6) Setup php-fpm pool: listen di TCP port 9000
+RUN sed -i 's/listen = .*/listen = 127.0.0.1:9000/' /usr/local/etc/php-fpm.d/www.conf
+
+# 7) nginx config, hapus default site Debian agar tidak konflik
+RUN rm -f /etc/nginx/sites-enabled/default
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+WORKDIR /var/www
 COPY . .
 
-RUN mkdir storage
+RUN mkdir -p storage \
+    storage/framework/views \
+    storage/framework/sessions \
+    storage/framework/cache/data \
+    storage/logs \
+    bootstrap/cache
+
+# 8) Install PHP dependencies
+RUN composer install --no-dev --optimize-autoloader --no-interaction
+
+# 9) Install puppeteer untuk scripts/ (path sesuai basepath Laravel)
+RUN cd scripts && npm ci
+
+# 10) Build frontend assets (Vite/Filament)
+RUN npm ci && npm run build
+
+# 11) Storage symlink untuk public file access
+RUN APP_ENV=local php artisan storage:link
 
 RUN chown -R www-data:www-data storage bootstrap/cache \
   && chmod -R 775 storage bootstrap/cache
 
-EXPOSE 9000
-CMD ["php-fpm"]
+EXPOSE 80
+
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

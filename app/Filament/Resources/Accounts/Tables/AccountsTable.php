@@ -2,11 +2,15 @@
 
 namespace App\Filament\Resources\Accounts\Tables;
 
+use App\Exceptions\StockExhaustedException;
 use App\Jobs\CancelDuplicateTransactionJob;
+use App\Jobs\NotifyNikChainCompleted;
+use App\Jobs\ProcessNikJob;
 use App\Jobs\VerifyNikTransactionJob;
 use App\Models\Account;
 use App\Models\DataMasterDocument;
 use App\Models\DataNikInput;
+use App\Models\User;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Placeholder;
@@ -20,6 +24,7 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Wizard\Step;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\ViewColumn;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
@@ -31,10 +36,12 @@ use Filament\Tables\Table;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Livewire\Component as LivewireComponent;
 use Throwable;
 
@@ -62,6 +69,9 @@ class AccountsTable
                     ->description(static fn(Account $record): ?string => $record->dataNikInput
                         ? 'NIK: ' . $record->dataNikInput?->nik . ' | File: ' . $record->dataNikInput?->document?->original_name
                         : null),
+                ViewColumn::make('nik_progress')
+                    ->label('Progress Input')
+                    ->view('filament.tables.columns.nik-progress'),
             ])
             ->recordUrl(false)
             ->filters([
@@ -811,45 +821,83 @@ class AccountsTable
                                 return;
                             }
 
-                            foreach ($nikInputs as $nikInput) {
-                                $exitCode = Artisan::call('merchant:verify-nik', [
-                                    'account' => $record->email,
-                                    'nik' => $nikInput->nik,
-                                    '--document-id' => $documentId,
-                                    '--nik-input-id' => $nikInput->id,
-                                ]);
+                            $accountId = (int) $record->id;
+                            $accountEmail = $record->email;
+                            $documentIdInt = (int) $documentId;
+                            $userId = auth()->id();
+                            $total = $nikInputs->count();
 
-                                if ($exitCode !== Command::SUCCESS) {
-                                    $output = trim(Artisan::output());
-                                    $decoded = json_decode($output);
+                            // ID unik untuk satu kali dispatch. Men-scope counter progres
+                            // supaya job run lama yang masih nyangkut tidak menimpa run baru.
+                            $runId = (string) Str::uuid();
 
-                                    if ($decoded?->message === 'Transaksi melebihi stok yang dapat dijual' && $decoded?->code === 400) {
+                            $progressKey = "nik_progress:{$accountId}";
+                            Cache::put($progressKey, [
+                                'run_id'     => $runId,
+                                'total'      => $total,
+                                'done'       => 0,
+                                'status'     => 'running',
+                                'started_at' => now()->toIso8601String(),
+                            ], now()->addHours(2));
+
+                            // Rangkai 1 ProcessNikJob per NIK. Bus::chain menjamin job
+                            // berikutnya hanya dijalankan setelah job sebelumnya selesai,
+                            // sehingga urutan NIK terjaga ketat (1 -> N) berapa pun jumlah worker.
+                            // `position` (1-based) dipakai untuk menghitung progres.
+                            $jobs = [];
+                            foreach ($nikInputs->values() as $i => $nikInput) {
+                                $jobs[] = new ProcessNikJob(
+                                    account_id: $accountId,
+                                    data_master_document_id: $documentIdInt,
+                                    data_nik_input_id: $nikInput->id,
+                                    run_id: $runId,
+                                    position: $i + 1,
+                                    total: $total,
+                                );
+                            }
+
+                            // Job penutup: kirim notif "selesai" saat seluruh rangkaian beres.
+                            $jobs[] = new NotifyNikChainCompleted($accountId, $total, $userId, $runId);
+
+                            // Arahkan ke koneksi 'redis' karena Horizon (worker production)
+                            // hanya memproses queue redis, sedangkan default QUEUE_CONNECTION
+                            // project ini masih 'database' yang tidak di-supervise Horizon.
+                            Bus::chain($jobs)
+                                ->onConnection('redis')
+                                ->catch(function (\Throwable $e) use ($accountEmail, $userId, $progressKey, $runId): void {
+                                    // Hentikan progress bar & tandai kondisi akhir chain.
+                                    $state = Cache::get($progressKey);
+                                    if (is_array($state) && ($state['run_id'] ?? null) === $runId) {
+                                        $state['status'] = $e instanceof StockExhaustedException ? 'stopped' : 'failed';
+                                        Cache::put($progressKey, $state, now()->addMinute());
+                                    }
+
+                                    $user = $userId ? User::find($userId) : null;
+                                    if (! $user) {
+                                        return;
+                                    }
+
+                                    if ($e instanceof StockExhaustedException) {
                                         Notification::make()
                                             ->title('Stok hari ini sudah ter-input semua.')
+                                            ->body("Proses dihentikan untuk akun {$accountEmail} karena stok habis.")
                                             ->success()
-                                            ->send();
+                                            ->sendToDatabase($user);
 
                                         return;
                                     }
 
-                                    if (\Str::startsWith($output, "Verify-NIK request failed") || \Str::startsWith($output, "Invalid verify-nik response") || ($decoded && ($decoded?->code ?? 0) >= 400)) {
-                                        usleep(3000000);
-                                        continue;
-                                    }
-
                                     Notification::make()
-                                        ->title("Gagal memproses NIK {$nikInput->nik}")
-                                        ->body($output !== '' ? $output : null)
+                                        ->title('Proses input NIK terhenti')
+                                        ->body("Terjadi kendala pada akun {$accountEmail}: {$e->getMessage()}")
                                         ->danger()
-                                        ->send();
-
-                                    return;
-                                }
-                                usleep(3000000);
-                            }
+                                        ->sendToDatabase($user);
+                                })
+                                ->dispatch();
 
                             Notification::make()
-                                ->title('Berhasil memproses data NIK terpilih.')
+                                ->title("{$nikInputs->count()} NIK masuk antrian")
+                                ->body('Proses berjalan di background, hasil akan diberitahukan saat selesai.')
                                 ->success()
                                 ->send();
                         }),

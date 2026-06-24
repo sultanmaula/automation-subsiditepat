@@ -27,6 +27,11 @@ class AppServiceProvider extends ServiceProvider
     {
         Livewire::component('app.filament.auth.pages.login', FilamentLogin::class);
 
+	if (config('app.force_https')) {	
+	    \URL::forceScheme('https');
+	}
+
+
         RateLimiter::for('pertamina-api', function ($job) {
             return Limit::perMinute(10)
                 ->by('pertamina-api-account-' . $job->account_id);

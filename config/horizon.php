@@ -210,6 +210,22 @@ return [
             'timeout' => 60,
             'nice' => 0,
         ],
+
+        // Pool terpisah khusus job Data Generator Random supaya tidak
+        // berebut worker dengan ProcessNikJob di queue 'default'.
+        'supervisor-random' => [
+            'connection' => 'redis',
+            'queue' => ['random-nik'],
+            'balance' => 'auto',
+            'autoScalingStrategy' => 'time',
+            'maxProcesses' => 1,
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 128,
+            'tries' => 1,
+            'timeout' => 60,
+            'nice' => 0,
+        ],
     ],
 
     'environments' => [
@@ -219,11 +235,19 @@ return [
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
+            'supervisor-random' => [
+                'maxProcesses' => 3,
+                'balanceMaxShift' => 1,
+                'balanceCooldown' => 3,
+            ],
         ],
 
         'local' => [
             'supervisor-1' => [
                 'maxProcesses' => 3,
+            ],
+            'supervisor-random' => [
+                'maxProcesses' => 1,
             ],
         ],
     ],

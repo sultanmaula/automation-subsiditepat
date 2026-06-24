@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\StockExhaustedException;
 use App\Models\Account;
 use App\Models\DataNikInput;
 use App\Models\NikInputHistory;
@@ -49,7 +50,63 @@ class ProcessNikJob implements ShouldQueue
         public int $account_id,
         public int $data_master_document_id,
         public int $data_nik_input_id,
+        public string $run_id = '',
+        public int $position = 0,
+        public int $total = 0,
     ) {}
+
+    /**
+     * Key cache progres per akun.
+     */
+    public function progressKey(): string
+    {
+        return "nik_progress:{$this->account_id}";
+    }
+
+    /**
+     * Tandai NIK posisi ini sudah mencapai status final.
+     *
+     * Chain berjalan strict berurutan, jadi `done = max(done, position)`
+     * aman dari double-count: rate-limit release() tidak memanggil ini,
+     * sehingga job yang dijalankan ulang tidak menaikkan progres dua kali.
+     * Diabaikan bila run_id tidak cocok (state sudah ditimpa run baru).
+     */
+    protected function markProgress(): void
+    {
+        if ($this->run_id === '') {
+            return;
+        }
+
+        $state = Cache::get($this->progressKey());
+
+        if (! is_array($state) || ($state['run_id'] ?? null) !== $this->run_id) {
+            return;
+        }
+
+        $state['done'] = max((int) ($state['done'] ?? 0), $this->position);
+
+        Cache::put($this->progressKey(), $state, now()->addHours(2));
+    }
+
+    /**
+     * Tandai chain berhenti (mis. stok habis) tanpa mengubah jumlah done.
+     */
+    protected function markStopped(): void
+    {
+        if ($this->run_id === '') {
+            return;
+        }
+
+        $state = Cache::get($this->progressKey());
+
+        if (! is_array($state) || ($state['run_id'] ?? null) !== $this->run_id) {
+            return;
+        }
+
+        $state['status'] = 'stopped';
+
+        Cache::put($this->progressKey(), $state, now()->addMinutes(1));
+    }
 
     /**
      * =====================================================
@@ -76,6 +133,7 @@ class ProcessNikJob implements ShouldQueue
             ->exists();
 
         if ($alreadyToday) {
+            $this->markProgress();
             return; // job dianggap sukses
         }
 
@@ -88,6 +146,7 @@ class ProcessNikJob implements ShouldQueue
             ->count();
 
         if ($monthlyCount >= 4) {
+            $this->markProgress();
             return;
         }
 
@@ -118,25 +177,44 @@ class ProcessNikJob implements ShouldQueue
         RateLimiter::hit($rateKey, 60);
 
         /** =========================
-         * 5. PASTIKAN TOKEN ADA
+         * 5-6. TOKEN + CALL API PERTAMINA
+         *
+         * Strategi error (agar cocok untuk Bus::chain):
+         *  - StockExhaustedException -> $this->fail(): hentikan SELURUH chain.
+         *  - error lain (network/verify/submit gagal) -> log + return:
+         *    SKIP NIK ini, chain LANJUT ke NIK berikutnya. NIK yang dilewati
+         *    tidak tersimpan di history sehingga akan dicoba lagi di run berikutnya.
          * ========================= */
-        if (! Cache::get("merchant_api_token_{$account->email}")) {
-            Artisan::call('merchant:fetch-token', [
-                '--email' => $account->email,
-                '--pin'   => $account->pin,
+        try {
+            if (! Cache::get("merchant_api_token_{$account->email}")) {
+                Artisan::call('merchant:fetch-token', [
+                    '--email' => $account->email,
+                    '--pin'   => $account->pin,
+                ]);
+            }
+
+            $bearerToken = Cache::get("merchant_api_token_{$account->email}");
+            if (! $bearerToken) {
+                throw new RuntimeException('Merchant token not available');
+            }
+
+            $verifyData = $this->verifyNik($bearerToken, $nikInput->nik);
+            $this->submitTransaction($bearerToken, $nikInput->nik, $verifyData, $account);
+        } catch (StockExhaustedException $e) {
+            // Stok harian habis -> hentikan rangkaian, ditangani oleh chain ->catch().
+            $this->markStopped();
+            $this->fail($e);
+            return;
+        } catch (Throwable $e) {
+            Log::warning('[NIK] Job skip (error, lanjut NIK berikutnya)', [
+                'account_id'   => $this->account_id,
+                'nik'          => $nikInput->nik,
+                'nik_input_id' => $this->data_nik_input_id,
+                'error'        => $e->getMessage(),
             ]);
+            $this->markProgress();
+            return; // skip & lanjut: chain tetap jalan ke NIK berikutnya
         }
-
-        $bearerToken = Cache::get("merchant_api_token_{$account->email}");
-        if (! $bearerToken) {
-            throw new RuntimeException('Merchant token not available');
-        }
-
-        /** =========================
-         * 6. CALL API PERTAMINA
-         * ========================= */
-        $verifyData = $this->verifyNik($bearerToken, $nikInput->nik);
-        $this->submitTransaction($bearerToken, $nikInput->nik, $verifyData, $account);
 
         /** =========================
          * 7. SAVE HISTORY (SAFE UNIQUE)
@@ -168,6 +246,8 @@ class ProcessNikJob implements ShouldQueue
             'last_nik_input'  => $nikInput->nik,
             'last_update_api' => now(),
         ]);
+
+        $this->markProgress();
 
         Log::info('[NIK] Job success', [
             'account_id' => $this->account_id,
@@ -231,6 +311,13 @@ class ProcessNikJob implements ShouldQueue
         );
 
         $json = $res->json();
+
+        if (
+            ($json['code'] ?? null) === 400
+            && ($json['message'] ?? null) === 'Transaksi melebihi stok yang dapat dijual'
+        ) {
+            throw new StockExhaustedException((string) $json['message']);
+        }
 
         if (($json['code'] ?? null) !== 200 || ($json['status'] ?? null) !== 'OK') {
             throw new RuntimeException(json_encode($json));

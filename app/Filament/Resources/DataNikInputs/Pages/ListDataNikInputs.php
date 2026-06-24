@@ -200,7 +200,13 @@ class ListDataNikInputs extends ListRecords
                     }
 
                     foreach (array_values($nikList) as $index => $nik) {
-                        GenerateRandomNikJob::dispatch($account->id, $document->id, $nik)->delay(now()->addSeconds(6));
+                        // Paksa ke koneksi 'redis' karena Horizon hanya men-supervise redis,
+                        // sedangkan QUEUE_CONNECTION runtime container masih 'database'
+                        // (sama seperti pola ProcessNikJob). Tanpa ini job nyangkut di DB.
+                        GenerateRandomNikJob::dispatch($account->id, $document->id, $nik)
+                            ->onConnection('redis')
+                            ->onQueue('random-nik')
+                            ->delay(now()->addSeconds(6));
                     }
 
                     Notification::make()
