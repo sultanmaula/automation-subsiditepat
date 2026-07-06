@@ -10,7 +10,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -18,6 +17,24 @@ use Illuminate\Support\Facades\Storage;
 class GenerateRandomNikJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public int $tries = 3;
+
+    /** Jeda antar-percobaan saat job benar-benar error (bukan throttle). */
+    public array $backoff = [30, 60, 120];
+
+    /** Gagalkan cepat bila error sungguhan berulang, terlepas dari $tries. */
+    public int $maxExceptions = 3;
+
+    /**
+     * Batch generator (ListDataNikInputs) staggers dispatch 6 detik/NIK hingga
+     * 15.000 NIK -> ekor antrean bisa ~25 jam. retryUntil harus melewati itu,
+     * kalau tidak job di ekor batch besar kedaluwarsa sebelum sempat dieksekusi.
+     */
+    public function retryUntil(): \DateTime
+    {
+        return now()->addHours(30);
+    }
 
     public function __construct(
         public int $accountId,
@@ -35,9 +52,15 @@ class GenerateRandomNikJob implements ShouldQueue
             return;
         }
 
-        $token = $this->getBearerToken($account);
+        $token = Cache::get("merchant_api_token_{$account->email}");
 
         if (! $token) {
+            FetchMerchantTokenJob::dispatch($this->accountId)
+                ->onConnection('redis')
+                ->onQueue('fetch-token');
+
+            $this->release(150);
+
             return;
         }
 
@@ -53,8 +76,6 @@ class GenerateRandomNikJob implements ShouldQueue
 
         $responseData = $this->verifyNik($token, $nik, $account);
 
-        $this->sleepThrottle();
-
         if (! $responseData) {
             return;
         }
@@ -64,10 +85,10 @@ class GenerateRandomNikJob implements ShouldQueue
         $record = DataNikInput::updateOrCreate(
             ['nik' => $nik],
             [
-                'name' => $responseData['name'] ?? 'Unknown',
-                'address' => $responseData['address'] ?? null,
+                'name'                    => $responseData['name'] ?? 'Unknown',
+                'address'                 => $responseData['address'] ?? null,
                 'data_master_document_id' => $document->id,
-                'order' => $order,
+                'order'                   => $order,
             ]
         );
 
@@ -78,8 +99,8 @@ class GenerateRandomNikJob implements ShouldQueue
 
     protected function verifyNik(string $bearerToken, string $nik, Account $account): ?array
     {
-        $response = Http::withHeaders([
-            'Authorization' => 'Bearer ' . $bearerToken,
+        $response = Http::timeout(30)->withHeaders([
+            'Authorization' => 'Bearer '.$bearerToken,
         ])->get('https://api-map.my-pertamina.id/customers/v2/verify-nik', [
             'nationalityId' => $nik,
         ]);
@@ -107,18 +128,6 @@ class GenerateRandomNikJob implements ShouldQueue
         }
 
         return $data;
-    }
-
-    protected function getBearerToken(Account $account): ?string
-    {
-        if (! Cache::get("merchant_api_token_{$account->email}")) {
-            Artisan::call('merchant:fetch-token', [
-                '--email' => $account->email,
-                '--pin' => $account->pin,
-            ]);
-        }
-
-        return Cache::get("merchant_api_token_{$account->email}");
     }
 
     protected function appendToDocument(DataMasterDocument $document, string $nik, ?string $name, ?string $address): void
@@ -158,10 +167,5 @@ class GenerateRandomNikJob implements ShouldQueue
         $document->update([
             'size' => Storage::disk($disk)->size($document->path),
         ]);
-    }
-
-    protected function sleepThrottle(): void
-    {
-        usleep(6000000);
     }
 }

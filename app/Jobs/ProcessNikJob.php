@@ -2,16 +2,19 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\NikBlockedException;
+use App\Exceptions\PertaminaRateLimitedException;
 use App\Exceptions\StockExhaustedException;
+use App\Exceptions\TokenStaleException;
 use App\Models\Account;
 use App\Models\DataNikInput;
 use App\Models\NikInputHistory;
+use App\Services\MerchantTokenService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -89,26 +92,6 @@ class ProcessNikJob implements ShouldQueue
     }
 
     /**
-     * Tandai chain berhenti (mis. stok habis) tanpa mengubah jumlah done.
-     */
-    protected function markStopped(): void
-    {
-        if ($this->run_id === '') {
-            return;
-        }
-
-        $state = Cache::get($this->progressKey());
-
-        if (! is_array($state) || ($state['run_id'] ?? null) !== $this->run_id) {
-            return;
-        }
-
-        $state['status'] = 'stopped';
-
-        Cache::put($this->progressKey(), $state, now()->addMinutes(1));
-    }
-
-    /**
      * =====================================================
      * HANDLE
      * =====================================================
@@ -140,12 +123,19 @@ class ProcessNikJob implements ShouldQueue
         /** =========================
          * 3. LIMIT BULANAN (4x / NIK)
          * ========================= */
-        $monthlyCount = NikInputHistory::where('account_id', $this->account_id)
+        $monthHistory = NikInputHistory::where('account_id', $this->account_id)
             ->where('nik', $nikInput->nik)
             ->where('input_month', $month)
-            ->count();
+            ->get(['is_failed']);
 
-        if ($monthlyCount >= 4) {
+        // NIK ditandai isBlocked (mis. status MENINGGAL di Dukcapil) bulan ini ->
+        // permanen skip, tidak pernah dicoba ulang (lihat NikBlockedException di bawah).
+        if ($monthHistory->contains('is_failed', true)) {
+            $this->markProgress();
+            return;
+        }
+
+        if ($monthHistory->count() >= 4) {
             $this->markProgress();
             return;
         }
@@ -180,38 +170,113 @@ class ProcessNikJob implements ShouldQueue
          * 5-6. TOKEN + CALL API PERTAMINA
          *
          * Strategi error (agar cocok untuk Bus::chain):
-         *  - StockExhaustedException -> $this->fail(): hentikan SELURUH chain.
+         *  - StockExhaustedException -> log + return: SKIP NIK ini, chain
+         *    LANJUT ke NIK berikutnya (stok "dapat dijual" real-time dari
+         *    Pertamina bisa lebih rendah dari stockAvailable yang dicek di
+         *    awal, jadi ini bukan alasan untuk hentikan seluruh chain).
          *  - error lain (network/verify/submit gagal) -> log + return:
          *    SKIP NIK ini, chain LANJUT ke NIK berikutnya. NIK yang dilewati
          *    tidak tersimpan di history sehingga akan dicoba lagi di run berikutnya.
          * ========================= */
         try {
-            if (! Cache::get("merchant_api_token_{$account->email}")) {
-                Artisan::call('merchant:fetch-token', [
-                    '--email' => $account->email,
-                    '--pin'   => $account->pin,
-                ]);
-            }
-
-            $bearerToken = Cache::get("merchant_api_token_{$account->email}");
+            $bearerToken = MerchantTokenService::getOrFetch($account);
             if (! $bearerToken) {
                 throw new RuntimeException('Merchant token not available');
             }
 
-            $verifyData = $this->verifyNik($bearerToken, $nikInput->nik);
+            $verifyData = $this->verifyNik($bearerToken, $nikInput->nik, $account);
             $this->submitTransaction($bearerToken, $nikInput->nik, $verifyData, $account);
         } catch (StockExhaustedException $e) {
-            // Stok harian habis -> hentikan rangkaian, ditangani oleh chain ->catch().
-            $this->markStopped();
-            $this->fail($e);
-            return;
-        } catch (Throwable $e) {
-            Log::warning('[NIK] Job skip (error, lanjut NIK berikutnya)', [
+            // Pertamina menolak transaksi NIK ini karena stok "yang dapat
+            // dijual" sudah menipis/habis di sisi mereka (independen dari
+            // stockAvailable yang dicek sebelum dispatch) -> skip NIK ini
+            // saja, lanjut ke NIK berikutnya. Tidak tersimpan di history
+            // sehingga akan dicoba lagi di run berikutnya.
+            Log::error('[NIK] Stock exhausted untuk NIK ini, skip & lanjut', [
                 'account_id'   => $this->account_id,
                 'nik'          => $nikInput->nik,
                 'nik_input_id' => $this->data_nik_input_id,
                 'error'        => $e->getMessage(),
             ]);
+            $this->markProgress();
+            return;
+        } catch (NikBlockedException $e) {
+            // NIK ditolak permanen oleh Pertamina (mis. status MENINGGAL di Dukcapil).
+            // Simpan is_failed=true supaya tidak dihitung sebagai stok terpakai, TAPI
+            // tetap tercatat sehingga frontier rotasi per-file bisa maju melewatinya
+            // dan NIK ini tidak dicoba ulang lagi bulan ini.
+            Log::warning('[NIK] NIK blocked, skip permanen bulan ini', [
+                'account_id'   => $this->account_id,
+                'nik'          => $nikInput->nik,
+                'nik_input_id' => $this->data_nik_input_id,
+                'reason'       => $e->getMessage(),
+            ]);
+
+            try {
+                NikInputHistory::firstOrCreate(
+                    [
+                        'account_id' => $this->account_id,
+                        'nik'        => $nikInput->nik,
+                        'input_date' => $today,
+                    ],
+                    [
+                        'data_master_document_id' => $this->data_master_document_id,
+                        'data_nik_input_id'       => $nikInput->id,
+                        'input_month'             => $month,
+                        'is_failed'               => true,
+                    ]
+                );
+            } catch (QueryException $qe) {
+                if ($qe->getCode() !== '23505') {
+                    throw $qe;
+                }
+            }
+
+            $this->markProgress();
+            return;
+        } catch (PertaminaRateLimitedException $e) {
+            // Rate limit asli dari Pertamina, bukan soal token -> retry NIK yang
+            // sama setelah countDownTime, JANGAN markProgress (bukan sukses/gagal
+            // permanen, cuma perlu ditunda).
+            Log::warning('[NIK] Pertamina rate-limit, retry setelah countdown', [
+                'account_id' => $this->account_id,
+                'nik'        => $nikInput->nik,
+                'delay'      => $e->retryAfterSeconds,
+            ]);
+            $this->release($e->retryAfterSeconds);
+            return;
+        } catch (TokenStaleException $e) {
+            // Token dianggap valid secara lokal (cache TTL 14 menit) tapi ditolak
+            // Pertamina eksplisit 401/403. Token sudah di-invalidate() di titik
+            // lempar exception ini, jadi NIK berikutnya di chain otomatis pakai
+            // token segar -> skip NIK ini saja & lanjut (bukan retry NIK yang sama),
+            // konsisten dengan aturan: error selain rate-limit = skip & lanjut.
+            Log::error('[NIK] Token basi terdeteksi, skip NIK ini & lanjut', [
+                'account_id'   => $this->account_id,
+                'nik'          => $nikInput->nik,
+                'nik_input_id' => $this->data_nik_input_id,
+                'reason'       => $e->getMessage(),
+            ]);
+            $this->markProgress();
+            return;
+        } catch (Throwable $e) {
+            Log::error('[NIK] Job skip (error, lanjut NIK berikutnya)', [
+                'account_id'   => $this->account_id,
+                'nik'          => $nikInput->nik,
+                'nik_input_id' => $this->data_nik_input_id,
+                'error'        => $e->getMessage(),
+            ]);
+
+            // Tidak tercatat di NikInputHistory (supaya bisa dicoba lagi besok/bulan
+            // depan), TAPI ditandai "skip hari ini" agar rotasi frontier auto-input
+            // tidak berulang kali memilih NIK bermasalah yang sama di run 15 menit
+            // berikutnya pada hari yang sama (lihat AutoInputNikCommand::selectNiks()).
+            Cache::put(
+                "nik_skip_today:{$this->account_id}:{$nikInput->nik}",
+                true,
+                now()->endOfDay()
+            );
+
             $this->markProgress();
             return; // skip & lanjut: chain tetap jalan ke NIK berikutnya
         }
@@ -260,7 +325,7 @@ class ProcessNikJob implements ShouldQueue
      * API HELPERS
      * =====================================================
      */
-    protected function verifyNik(string $bearerToken, string $nik): array
+    protected function verifyNik(string $bearerToken, string $nik, Account $account): array
     {
         $res = Http::withHeaders([
             'Authorization' => 'Bearer ' . $bearerToken,
@@ -269,11 +334,33 @@ class ProcessNikJob implements ShouldQueue
             ['nationalityId' => $nik]
         );
 
+        $json = $res->json();
+
+        if (($json['code'] ?? null) === 429 || ($json['status'] ?? null) === 'TOO_MANY_REQUEST') {
+            $delay = max((int) ($json['data']['countDownTime'] ?? 10), 10);
+
+            throw new PertaminaRateLimitedException('Verify-NIK rate limited: ' . $res->body(), $delay);
+        }
+
+        if (in_array($res->status(), [401, 403], true)) {
+            // Token cache masih dianggap valid secara lokal (TTL 14 menit) tapi
+            // sudah kedaluwarsa di sisi Pertamina -> buang supaya attempt
+            // berikutnya fetch token baru, bukan mengulang token basi ini.
+            MerchantTokenService::invalidate($account);
+            throw new TokenStaleException('Verify-NIK: ' . $res->body());
+        }
+
         if ($res->failed()) {
-            throw new RuntimeException('Verify-NIK failed');
+            throw new RuntimeException('Verify-NIK failed: ' . $res->body());
         }
 
         $data = $res->json('data');
+
+        if ($data['isBlocked'] ?? false) {
+            throw new NikBlockedException(
+                (string) ($data['reason']['message'] ?? 'NIK isBlocked oleh Pertamina')
+            );
+        }
 
         foreach (['token', 'familyIdEncrypted', 'name'] as $key) {
             if (blank($data[$key] ?? null)) {
@@ -311,6 +398,23 @@ class ProcessNikJob implements ShouldQueue
         );
 
         $json = $res->json();
+
+        // Rate limit ASLI dari Pertamina (di luar RateLimiter internal kita
+        // 10 hit/60 detik/akun) -> BUKAN soal token, jangan invalidate. Tunggu
+        // sesuai countDownTime lalu retry NIK yang sama dengan token yang sama.
+        if (($json['code'] ?? null) === 429 || ($json['status'] ?? null) === 'TOO_MANY_REQUEST') {
+            $delay = max((int) ($json['data']['countDownTime'] ?? 10), 10);
+
+            throw new PertaminaRateLimitedException('Submit-transaction rate limited: ' . $res->body(), $delay);
+        }
+
+        // Token masih dianggap valid secara lokal (cache TTL 14 menit) tapi
+        // ditolak Pertamina di step submit -> baru bisa dipastikan token basi
+        // kalau balasannya eksplisit 401/403 (lihat juga verifyNik()).
+        if (in_array($res->status(), [401, 403], true)) {
+            MerchantTokenService::invalidate($account);
+            throw new TokenStaleException('Submit-transaction: ' . $res->body());
+        }
 
         if (
             ($json['code'] ?? null) === 400

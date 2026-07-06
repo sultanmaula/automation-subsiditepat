@@ -46,8 +46,24 @@ services:
     networks:
       - app
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin-automation-subsiditepatlpg
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: sultanmaulachamzah@gmail.com
+      PGADMIN_DEFAULT_PASSWORD: "Sult@n354"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - app
+      - proxy
+    depends_on:
+      - postgres
+
 volumes:
   pgdata:
+  pgadmin_data:
   scripts_node_modules:
 
 networks:

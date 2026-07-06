@@ -79,29 +79,29 @@ class AccountsTable
             ])
             ->recordActions([
                 ActionGroup::make([
-                    Action::make('toggleAutoRetrieve')
-                        ->label(fn(Account $record): string => $record->auto_retrieve ? 'Auto Retrieve: ON' : 'Auto Retrieve: OFF')
-                        ->icon(fn(Account $record): string => $record->auto_retrieve ? 'heroicon-s-check-circle' : 'heroicon-s-x-circle')
+                    Action::make('toggleAutoInputNik')
+                        ->label(fn(Account $record): string => $record->auto_input_nik ? 'Auto Input NIK: ON' : 'Auto Input NIK: OFF')
+                        ->icon(fn(Account $record): string => $record->auto_input_nik ? 'heroicon-s-check-circle' : 'heroicon-s-x-circle')
                         ->hiddenLabel()
                         ->extraAttributes(fn(Account $record): array => [
-                            'x-tooltip.raw' => $record->auto_retrieve ? 'Auto Retrieve: ON' : 'Auto Retrieve: OFF',
+                            'x-tooltip.raw' => $record->auto_input_nik ? 'Auto Input NIK: ON' : 'Auto Input NIK: OFF',
                         ])
-                        ->color(fn(Account $record): string => $record->auto_retrieve ? 'success' : 'danger')
+                        ->color(fn(Account $record): string => $record->auto_input_nik ? 'success' : 'danger')
                         ->action(function (Account $record): void {
-                            if ($record->auto_retrieve == false && (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL))
+                            if ($record->auto_input_nik == false && (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL))
                                 Artisan::call('merchant:fetch-token', [
                                     '--email' => $record->email,
                                     '--pin' => $record->pin,
                                 ]);
-                            
+
                             $record->update([
-                                'auto_retrieve' => !$record->auto_retrieve,
+                                'auto_input_nik' => !$record->auto_input_nik,
                             ]);
 
-                            $status = $record->auto_retrieve ? 'diaktifkan' : 'dinonaktifkan';
+                            $status = $record->auto_input_nik ? 'diaktifkan' : 'dinonaktifkan';
 
                             Notification::make()
-                                ->title("Auto Retrieve berhasil {$status}.")
+                                ->title("Auto Input NIK berhasil {$status}.")
                                 ->success()
                                 ->send();
                         }),
@@ -916,7 +916,7 @@ class AccountsTable
                     DeleteBulkAction::make(),
                 ]),
             ])
-            ->poll('1s');
+            ->poll('5s');
     }
 
     protected static function fetchSalesReportData(Account $record, Carbon $start, Carbon $end, ?string $search = null): array

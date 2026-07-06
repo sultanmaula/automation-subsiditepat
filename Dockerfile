@@ -10,6 +10,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
   git curl unzip zip ca-certificates \
   build-essential autoconf pkg-config \
   libpq-dev libzip-dev libicu-dev \
+  postgresql-client \
   libjpeg62-turbo-dev libpng-dev libfreetype6-dev \
   libgmp-dev \
   chromium \

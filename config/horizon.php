@@ -226,6 +226,21 @@ return [
             'timeout' => 60,
             'nice' => 0,
         ],
+
+        // Pool khusus fetch token via Puppeteer — maxProcesses 1 supaya
+        // tidak pernah ada lebih dari 1 instance Chromium berjalan.
+        'supervisor-fetch-token' => [
+            'connection' => 'redis',
+            'queue' => ['fetch-token'],
+            'balance' => 'simple',
+            'maxProcesses' => 1,
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 256,
+            'tries' => 1,
+            'timeout' => 150,
+            'nice' => 0,
+        ],
     ],
 
     'environments' => [
@@ -240,6 +255,9 @@ return [
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
+            'supervisor-fetch-token' => [
+                'maxProcesses' => 1,
+            ],
         ],
 
         'local' => [
@@ -247,6 +265,9 @@ return [
                 'maxProcesses' => 3,
             ],
             'supervisor-random' => [
+                'maxProcesses' => 1,
+            ],
+            'supervisor-fetch-token' => [
                 'maxProcesses' => 1,
             ],
         ],
