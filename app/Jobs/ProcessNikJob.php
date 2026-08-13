@@ -836,17 +836,37 @@ class ProcessNikJob implements ShouldQueue
      */
     protected function registerNikIfNeeded(string $bearerToken, string $nik, array $verifyData, Account $account): void
     {
+        // Kanal 'nik' punya level sendiri (default debug); LOG_LEVEL global di
+        // produksi = error sehingga Log::info/warning biasa tidak pernah
+        // tertulis dan alur ini tampak tidak pernah jalan.
+        $log = Log::channel('nik');
+
+        $flags = [
+            'isAgreedAgreement'          => $verifyData['isAgreedAgreement'] ?? null,
+            'isAgreedReceiveInformation' => $verifyData['isAgreedReceiveInformation'] ?? null,
+            'isAgreedTerms'              => $verifyData['isAgreedTerms'] ?? null,
+            'isAgreedTermsConditions'    => $verifyData['isAgreedTermsConditions'] ?? null,
+            'isCompleted'                => $verifyData['isCompleted'] ?? null,
+        ];
+
         $allAgreed = ($verifyData['isAgreedAgreement'] ?? false) === true
             && ($verifyData['isAgreedReceiveInformation'] ?? false) === true
             && ($verifyData['isAgreedTerms'] ?? false) === true
             && ($verifyData['isAgreedTermsConditions'] ?? false) === true
             && ($verifyData['isCompleted'] ?? false) === true;
 
+        $log->debug('[NIK] Cek agreement sebelum registrasi', [
+            'account_id' => $this->account_id,
+            'nik'        => $nik,
+            'flags'      => $flags,
+            'all_agreed' => $allAgreed,
+        ]);
+
         if ($allAgreed) {
             return;
         }
 
-        Log::info('[NIK] Ada field agreement belum lengkap, mulai alur policy+consent+registrasi', [
+        $log->info('[NIK] Ada field agreement belum lengkap, mulai alur policy+consent+registrasi', [
             'account_id' => $this->account_id,
             'nik'        => $nik,
         ]);
@@ -858,7 +878,7 @@ class ProcessNikJob implements ShouldQueue
                 ['userType' => '3', 'contentType' => (string) $contentType],
             );
 
-            Log::info('[NIK] GET policy', [
+            $log->info('[NIK] GET policy', [
                 'account_id'  => $this->account_id,
                 'nik'         => $nik,
                 'contentType' => $contentType,
@@ -879,25 +899,29 @@ class ProcessNikJob implements ShouldQueue
             );
 
         if ($consentRes->failed()) {
-            Log::warning('[NIK] POST terms-consent gagal, tetap lanjut ke registrasi', [
+            $log->warning('[NIK] POST terms-consent gagal, tetap lanjut ke registrasi', [
                 'account_id'  => $this->account_id,
                 'nik'         => $nik,
                 'http_status' => $consentRes->status(),
                 'response'    => $consentRes->body(),
             ]);
         } else {
-            Log::info('[NIK] POST terms-consent berhasil', [
+            $log->info('[NIK] POST terms-consent berhasil', [
                 'account_id' => $this->account_id,
                 'nik'        => $nik,
                 'response'   => $consentRes->body(),
             ]);
         }
 
-        // Step 3: POST registrasi
+        // Step 3: PUT registrasi.
+        //
+        // HARUS PUT, bukan POST: endpoint ini menjawab 405 Method Not Allowed
+        // untuk POST (terbukti 13 Ags 2026, semua NIK). Dikonfirmasi dari
+        // devtools web resmi — PUT dengan body {"pob":...,"dob":...} -> 200 OK.
         $dob = $this->extractDobFromNik($nik);
         $pob = NikRegionHelper::getCityName($nik) ?? 'Jombang';
 
-        Log::info('[NIK] Hit API registrasi', [
+        $log->info('[NIK] Hit API registrasi', [
             'account_id' => $this->account_id,
             'nik'        => $nik,
             'dob'        => $dob,
@@ -905,20 +929,20 @@ class ProcessNikJob implements ShouldQueue
         ]);
 
         $res = Http::withHeaders($this->browserHeaders($bearerToken))
-            ->post(
+            ->put(
                 'https://api-map.my-pertamina.id/customers/v3/registration/' . $nik . '/Rumah%20Tangga',
                 ['pob' => $pob, 'dob' => $dob],
             );
 
         if ($res->failed()) {
-            Log::warning('[NIK] API registrasi gagal, tetap lanjut ke submit', [
+            $log->warning('[NIK] API registrasi gagal, tetap lanjut ke submit', [
                 'account_id'  => $this->account_id,
                 'nik'         => $nik,
                 'http_status' => $res->status(),
                 'response'    => $res->body(),
             ]);
         } else {
-            Log::info('[NIK] API registrasi berhasil', [
+            $log->info('[NIK] API registrasi berhasil', [
                 'account_id' => $this->account_id,
                 'nik'        => $nik,
                 'response'   => $res->body(),

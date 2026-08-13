@@ -73,6 +73,21 @@ return [
             'replace_placeholders' => true,
         ],
 
+        /*
+         * Kanal diagnostik alur registrasi NIK. Sengaja punya level sendiri
+         * (LOG_NIK_LEVEL, default debug) karena LOG_LEVEL global di produksi
+         * = error, sehingga Log::info/warning/debug tidak pernah tertulis —
+         * termasuk log "Hit API registrasi" yang membuat fitur registrasi
+         * tampak tidak pernah jalan padahal tidak ada buktinya sama sekali.
+         */
+        'nik' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/nik.log'),
+            'level' => env('LOG_NIK_LEVEL', 'debug'),
+            'days' => env('LOG_DAILY_DAYS', 14),
+            'replace_placeholders' => true,
+        ],
+
         'slack' => [
             'driver' => 'slack',
             'url' => env('LOG_SLACK_WEBHOOK_URL'),
