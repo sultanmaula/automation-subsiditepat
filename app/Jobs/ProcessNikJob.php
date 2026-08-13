@@ -1005,6 +1005,7 @@ class ProcessNikJob implements ShouldQueue
             'sourceTypeId'      => '1',
             'name'              => (string) $verifyData['name'],
             'channelinject'     => $verifyData['channelInject'] ?? 'tnp2k',
+            'coordinate'         => $verifyData['coordinate'] ?? '-,-',
         ];
 
         $res = Http::withHeaders($this->browserHeaders($bearerToken))->asMultipart()->post(
