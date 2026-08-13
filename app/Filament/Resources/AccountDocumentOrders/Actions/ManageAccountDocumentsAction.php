@@ -6,10 +6,12 @@ use App\Models\Account;
 use App\Models\AccountDocumentOrder;
 use App\Models\DataMasterDocument;
 use Filament\Actions\Action;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
 use Filament\Schemas\Components\Utilities\Set;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ManageAccountDocumentsAction
 {
@@ -30,7 +32,11 @@ class ManageAccountDocumentsAction
                     ->required()
                     ->live()
                     ->afterStateUpdated(function ($state, Set $set): void {
-                        $set('documents', static::existingDocuments($state));
+                        // `$set` menulis langsung ke state internal Repeater, yang
+                        // ber-key uuid — beda dengan array datar hasil dehydrate.
+                        $set('documents', static::toRepeaterState(
+                            static::existingDocuments($state),
+                        ));
                     }),
 
                 static::documentsField(),
@@ -47,6 +53,8 @@ class ManageAccountDocumentsAction
             ->label('Edit')
             ->icon('heroicon-m-pencil-square')
             ->color('primary')
+            // Beda dengan `$set` di atas: fillForm lewat proses hydration
+            // Repeater, yang justru mengharapkan array datar.
             ->fillForm(fn (AccountDocumentOrder $record): array => [
                 'account_id' => $record->account_id,
                 'documents' => static::existingDocuments($record->account_id),
@@ -70,23 +78,43 @@ class ManageAccountDocumentsAction
     {
         return Action::make($name)
             ->modalHeading('Kelola Dokumen Akun')
-            ->modalDescription('Pilih dokumen. Urutan mengikuti urutan pemilihan (dokumen pertama = urutan 1).')
+            ->modalDescription('Susun dokumen dari atas ke bawah — yang paling atas dipakai lebih dulu (urutan 1).')
             ->modalSubmitActionLabel('Simpan')
             ->action(function (array $data): void {
-                static::sync((int) $data['account_id'], array_values($data['documents']));
+                $documentIds = collect($data['documents'] ?? [])
+                    ->filter(fn ($id): bool => filled($id))
+                    ->map(fn ($id): int => (int) $id)
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                static::sync((int) $data['account_id'], $documentIds);
             });
     }
 
-    protected static function documentsField(): Select
+    protected static function documentsField(): Repeater
     {
-        return Select::make('documents')
+        return Repeater::make('documents')
             ->label('Dokumen')
-            ->options(DataMasterDocument::pluck('original_name', 'id'))
-            ->multiple()
-            ->searchable()
-            ->preload()
-            ->required()
-            ->helperText('Urutan dokumen mengikuti urutan saat dipilih. Bisa diatur ulang lewat drag & drop di tabel.');
+            ->simple(
+                Select::make('data_master_document_id')
+                    ->label('Dokumen')
+                    ->options(DataMasterDocument::pluck('original_name', 'id'))
+                    ->searchable()
+                    ->preload()
+                    ->required()
+                    // 1 akun tidak boleh punya dokumen yang sama dua kali
+                    // (unique account_id + data_master_document_id di DB).
+                    ->distinct()
+                    ->fixIndistinctState(),
+            )
+            ->itemNumbers()
+            ->reorderableWithButtons()
+            ->addActionLabel('Tambah dokumen')
+            ->defaultItems(0)
+            ->minItems(1)
+            ->columnSpanFull()
+            ->helperText('Geser baris (drag & drop) atau pakai tombol panah untuk mengatur urutan. Nomor di kiri = urutan pemakaian file.');
     }
 
     /**
@@ -104,6 +132,23 @@ class ManageAccountDocumentsAction
             ->orderBy('order')
             ->pluck('data_master_document_id')
             ->all();
+    }
+
+    /**
+     * Bungkus daftar id dokumen ke bentuk state internal Repeater.
+     *
+     * @param  array<int, int>  $documentIds
+     * @return array<string, array{data_master_document_id: int}>
+     */
+    protected static function toRepeaterState(array $documentIds): array
+    {
+        $state = [];
+
+        foreach ($documentIds as $documentId) {
+            $state[(string) Str::uuid()] = ['data_master_document_id' => $documentId];
+        }
+
+        return $state;
     }
 
     /**

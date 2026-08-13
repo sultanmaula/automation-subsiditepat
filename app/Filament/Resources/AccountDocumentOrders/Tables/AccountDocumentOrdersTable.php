@@ -8,7 +8,6 @@ use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\DeleteAction;
 use Filament\Tables\Columns\TextColumn;
-use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Grouping\Group;
 use Filament\Tables\Table;
 use Filament\Tables\Filters\SelectFilter;
@@ -51,13 +50,10 @@ class AccountDocumentOrdersTable
                     ->collapsible(),
             ])
             ->defaultGroup('account.email')
-            // Drag & drop hanya aktif saat satu akun difilter, agar penomoran
-            // ulang 1..N benar per-akun (lihat plan: reorderTable menomori global).
-            ->reorderable(
-                'order',
-                condition: fn (HasTable $livewire): bool =>
-                    filled(data_get($livewire->getTableFilterState('account_id'), 'value')),
-            )
+            // Penomoran ulang ditangani ListAccountDocumentOrders::reorderTable()
+            // yang menukar `order` per akun, jadi drag & drop aman dipakai
+            // tanpa harus memfilter satu akun lebih dulu.
+            ->reorderable('order')
             ->filters([
                 SelectFilter::make('account_id')
                     ->label('Account')
