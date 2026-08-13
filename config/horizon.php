@@ -207,7 +207,10 @@ return [
             'maxJobs' => 0,
             'memory' => 128,
             'tries' => 1,
-            'timeout' => 60,
+            // 150 (bukan 60) supaya worker tidak dibunuh saat ProcessNikJob
+            // menunggu fetch token Puppeteer (Process timeout 120s + overhead).
+            // Harus selalu < retry_after koneksi redis di config/queue.php (180).
+            'timeout' => 150,
             'nice' => 0,
         ],
 
@@ -246,6 +249,12 @@ return [
     'environments' => [
         'production' => [
             'supervisor-1' => [
+                // Bus::chain hanya menaruh 1 job pending per akun, dan job yang
+                // kena rate-limit parkir di zona delayed — auto-scaler melihat
+                // antrian "kosong" lalu menyusut ke 1 worker sehingga 5 chain
+                // akun antre di worker yang sama. minProcesses 5 menjamin
+                // 1 worker per akun aktif.
+                'minProcesses' => 5,
                 'maxProcesses' => 10,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,

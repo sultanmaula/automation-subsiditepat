@@ -600,6 +600,21 @@ class AccountsTable
                                 $action->cancel();
                             }
                         }),
+                    Action::make('lastInputLog')
+                        ->label('Log Inputan')
+                        ->icon('heroicon-s-clock')
+                        ->hiddenLabel()
+                        ->extraAttributes(['x-tooltip.raw' => 'Log Inputan Terakhir'])
+                        ->color('gray')
+                        ->slideOver()
+                        ->modalHeading(fn(Account $record): string => 'Log Inputan: ' . $record->email)
+                        ->modalSubmitAction(false)
+                        ->modalCancelActionLabel('Tutup')
+                        ->form([
+                            Placeholder::make('last_input_log')
+                                ->hiddenLabel()
+                                ->content(fn(Account $record): HtmlString => new HtmlString(self::renderLastInputLog($record))),
+                        ]),
                     Action::make('inputData')
                         ->label('Input Data')
                         ->icon('heroicon-s-paper-airplane')
@@ -1332,6 +1347,89 @@ class AccountsTable
 <div style="margin-top: 12px;">
 <span style="font-size: 10px; font-weight: 500; color: #9ca3af;">{$description}</span>
 </div>
+</div>
+HTML;
+    }
+
+    /**
+     * Render response API Pertamina (kolom api_response) sebagai blok collapsible.
+     * JSON dirapikan bila valid; kalau kosong (entri lama sebelum fitur ini)
+     * tampilkan catatan bahwa response tidak tersimpan.
+     */
+    protected static function renderApiResponseBlock(?string $apiResponse): string
+    {
+        if (blank($apiResponse)) {
+            return '<div style="font-size:11px;color:#9ca3af;font-style:italic;margin-top:4px;">Response API tidak tersimpan.</div>';
+        }
+
+        $decoded = json_decode($apiResponse, true);
+        $pretty = json_last_error() === JSON_ERROR_NONE
+            ? json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            : $apiResponse;
+
+        $escaped = e($pretty);
+
+        return <<<HTML
+<details style="margin-top:6px;">
+<summary style="cursor:pointer;font-size:11px;color:#2563eb;user-select:none;">Response API Pertamina</summary>
+<pre style="margin-top:4px;padding:8px;background-color:#0f172a;color:#e2e8f0;border-radius:6px;font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;word-break:break-word;">{$escaped}</pre>
+</details>
+HTML;
+    }
+
+    /**
+     * Render 10 inputan terakhir SATU akun (semua status: sukses/gagal/ditolak)
+     * sebagai HTML untuk slideOver. Tidak ada kolom `status` di tabel — status
+     * diturunkan dari is_failed + rejected_status
+     * (sukses = is_failed=false DAN rejected_status kosong).
+     */
+    protected static function renderLastInputLog(Account $record): string
+    {
+        $histories = $record->nikInputHistories()
+            ->with('document')
+            ->latest('created_at')
+            ->limit(10)
+            ->get();
+
+        if ($histories->isEmpty()) {
+            return '<p style="font-size:14px;color:#6b7280;font-style:italic;">Belum ada input untuk akun ini.</p>';
+        }
+
+        $lastAt = $histories->first()->created_at?->format('d/m H:i') ?? '-';
+
+        $rows = $histories->map(function ($history): string {
+            $time = $history->created_at?->format('d/m H:i') ?? '-';
+            $nik = e($history->nik ?? '-');
+            $document = e($history->document?->original_name ?? '-');
+
+            if ($history->is_failed) {
+                $badge = '<span style="background-color:#fee2e2;color:#b91c1c;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Gagal</span>';
+            } elseif ($history->rejected_status !== null) {
+                $badge = '<span style="background-color:#fef3c7;color:#b45309;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Ditolak: ' . e($history->rejected_status) . '</span>';
+            } else {
+                $badge = '<span style="background-color:#dcfce7;color:#15803d;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Sukses</span>';
+            }
+
+            $responseHtml = self::renderApiResponseBlock($history->api_response);
+
+            return <<<HTML
+<div style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+<div style="min-width:0;">
+<div style="font-size:13px;font-family:ui-monospace,monospace;color:#111827;">{$nik}</div>
+<div style="font-size:11px;color:#6b7280;">{$time} WIB &middot; {$document}</div>
+</div>
+<div style="flex-shrink:0;">{$badge}</div>
+</div>
+{$responseHtml}
+</div>
+HTML;
+        })->implode('');
+
+        return <<<HTML
+<div style="max-height:70vh;overflow-y:auto;">
+<div style="font-size:12px;color:#6b7280;margin-bottom:8px;">Terakhir input: <span style="font-family:ui-monospace,monospace;font-weight:600;">{$lastAt} WIB</span></div>
+{$rows}
 </div>
 HTML;
     }
