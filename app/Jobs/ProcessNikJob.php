@@ -761,6 +761,40 @@ class ProcessNikJob implements ShouldQueue
         }
     }
 
+    /**
+     * Ambil jeda (detik) yang diminta Pertamina dari body 429.
+     *
+     * Nama field-nya TIDAK konsisten antar endpoint: submit-transaction
+     * mengirim `countDownTime` (D besar), verify-nik mengirim `countdownTime`
+     * (d kecil). Sampai 13 Ags 2026 kedua pemanggil hanya membaca varian D
+     * besar, sehingga SETIAP 429 dari verify-nik jatuh ke fallback 10 detik
+     * padahal Pertamina minta 60 — kita menggedor 6x lebih cepat dari yang
+     * diminta, persis pola trafik yang mengunci akun 1 & 4 pada Juli 2026.
+     *
+     * Mengembalikan 10 bila tidak ada angka yang masuk akal (termasuk kasus
+     * countDownTime rusak -1e-9, 16 Jul 2026). Pemanggil memperlakukan nilai
+     * <= 10 sebagai "tidak terpakai" lalu memakai backoff menaik — lihat
+     * catch PertaminaRateLimitedException di handle().
+     *
+     * @param  array<mixed>|null  $json
+     */
+    protected function rateLimitDelay(?array $json): int
+    {
+        $data = $json['data'] ?? null;
+
+        if (! is_array($data)) {
+            return 10;
+        }
+
+        foreach (['countDownTime', 'countdownTime'] as $key) {
+            if (isset($data[$key]) && is_numeric($data[$key])) {
+                return max((int) $data[$key], 10);
+            }
+        }
+
+        return 10;
+    }
+
     protected function verifyNik(string $bearerToken, string $nik, Account $account): array
     {
         $res = Http::withHeaders($this->browserHeaders($bearerToken))->get(
@@ -771,7 +805,7 @@ class ProcessNikJob implements ShouldQueue
         $json = $res->json();
 
         if (($json['code'] ?? null) === 429 || ($json['status'] ?? null) === 'TOO_MANY_REQUEST') {
-            $delay = max((int) ($json['data']['countDownTime'] ?? 10), 10);
+            $delay = $this->rateLimitDelay($json);
 
             throw new PertaminaRateLimitedException('Verify-NIK rate limited: ' . $res->body(), $delay);
         }
@@ -830,9 +864,10 @@ class ProcessNikJob implements ShouldQueue
     }
 
     /**
-     * Jika salah satu field agreement belum terpenuhi, hit API policy (3x GET)
-     * lalu POST terms-consent, kemudian hit API registrasi supaya konsumen
-     * terdaftar sebelum transaksi dilanjutkan.
+     * Jika konsumen belum selesai terdaftar (`isCompleted` false), hit API
+     * policy (3x GET) lalu POST terms-consent, kemudian hit API registrasi
+     * supaya konsumen terdaftar sebelum transaksi dilanjutkan. Kalau sudah
+     * `isCompleted` true, langsung lanjut ke submit transaksi.
      */
     protected function registerNikIfNeeded(string $bearerToken, string $nik, array $verifyData, Account $account): void
     {
@@ -849,20 +884,25 @@ class ProcessNikJob implements ShouldQueue
             'isCompleted'                => $verifyData['isCompleted'] ?? null,
         ];
 
-        $allAgreed = ($verifyData['isAgreedAgreement'] ?? false) === true
-            && ($verifyData['isAgreedReceiveInformation'] ?? false) === true
-            && ($verifyData['isAgreedTerms'] ?? false) === true
-            && ($verifyData['isAgreedTermsConditions'] ?? false) === true
-            && ($verifyData['isCompleted'] ?? false) === true;
+        // Gerbang registrasi = `isCompleted` SAJA (13 Ags 2026).
+        //
+        // Sebelumnya kelima field di atas harus true. Syarat itu tidak pernah
+        // bisa tercapai: verify-nik konsisten membalas null untuk
+        // isAgreedAgreement, isAgreedReceiveInformation, dan isAgreedTerms —
+        // 98 sampel hari ini, dan tetap null setelah registrasi PUT dijawab
+        // 200 OK. Akibatnya alur policy+consent+registrasi jalan untuk SETIAP
+        // NIK di SETIAP percobaan (+5 request per NIK) tanpa pernah mengubah
+        // apa pun, menambah paparan ke anti-abuse Pertamina tanpa hasil.
+        $isCompleted = ($verifyData['isCompleted'] ?? false) === true;
 
-        $log->debug('[NIK] Cek agreement sebelum registrasi', [
-            'account_id' => $this->account_id,
-            'nik'        => $nik,
-            'flags'      => $flags,
-            'all_agreed' => $allAgreed,
+        $log->debug('[NIK] Cek status registrasi konsumen', [
+            'account_id'   => $this->account_id,
+            'nik'          => $nik,
+            'flags'        => $flags,
+            'is_completed' => $isCompleted,
         ]);
 
-        if ($allAgreed) {
+        if ($isCompleted) {
             return;
         }
 
@@ -978,7 +1018,7 @@ class ProcessNikJob implements ShouldQueue
         // 10 hit/60 detik/akun) -> BUKAN soal token, jangan invalidate. Tunggu
         // sesuai countDownTime lalu retry NIK yang sama dengan token yang sama.
         if (($json['code'] ?? null) === 429 || ($json['status'] ?? null) === 'TOO_MANY_REQUEST') {
-            $delay = max((int) ($json['data']['countDownTime'] ?? 10), 10);
+            $delay = $this->rateLimitDelay($json);
 
             throw new PertaminaRateLimitedException('Submit-transaction rate limited: ' . $res->body(), $delay);
         }
