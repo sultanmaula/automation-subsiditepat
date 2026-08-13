@@ -4,8 +4,11 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
 use App\Models\Account;
+use Illuminate\Support\Str;
 
 class FetchMerchantToken extends Command
 {
@@ -46,13 +49,22 @@ class FetchMerchantToken extends Command
 
         $process = new Process([$node, $script], base_path('scripts'), $env);
         $process->setTimeout(120);
-        $process->run();
+
+        try {
+            $process->run();
+        } catch (ProcessTimedOutException $e) {
+            Log::error('[merchant:fetch-token] proses Puppeteer timeout', [
+                'email' => $email,
+            ]);
+            $this->error('Failed: process timed out');
+            return Command::FAILURE;
+        }
 
         $out = $process->getOutput() ?: $process->getErrorOutput();
         $data = json_decode(trim($out), true);
 
         if (!empty($data['token'])) {
-            Cache::put('merchant_api_token_'.$email, $data['token'], now()->addMinutes(10));
+            Cache::put('merchant_api_token_'.$email, $data['token'], now()->addMinutes(14));
             Account::where('email', $email)->update(['last_update_api' => now()]);
 
             if ($this->option('screenshot') && !empty($data['screenshot'])) {
@@ -64,7 +76,15 @@ class FetchMerchantToken extends Command
             return Command::SUCCESS;
         }
 
-        $this->error('Failed: ' . ($out ?? 'no output'));
+        $reason = $data['error'] ?? $out ?? 'no output';
+
+        Log::error('[merchant:fetch-token] gagal ambil token', [
+            'email'     => $email,
+            'exit_code' => $process->getExitCode(),
+            'reason'    => Str::limit((string) $reason, 500),
+        ]);
+
+        $this->error('Failed: ' . $reason);
         return Command::FAILURE;
     }
 }

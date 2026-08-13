@@ -9,29 +9,43 @@ class WhatsAppService
 {
     public static function send(string $number, string $message): void
     {
-        Http::post('http://host.docker.internal:3001/send', [
+        self::addToQueue([
+            'id' => uniqid(),
+            'type' => 'text',
             'number' => $number,
             'message' => $message,
+            'createdAt' => time()
         ]);
     }
 
     public static function sendImage(string $number, string $imagePath, string $caption = ''): void
     {
-        $url = env('WHATSAPP_IMAGE_ENDPOINT', 'http://host.docker.internal:3001/send-image');
+        self::addToQueue([
+            'id' => uniqid(),
+            'type' => 'image',
+            'number' => $number,
+            'imagePath' => $imagePath,
+            'caption' => $caption,
+            'createdAt' => time()
+        ]);
+    }
 
-        $response = Http::attach('image', file_get_contents($imagePath), basename($imagePath))
-            ->post($url, [
-                'number' => $number,
-                'caption' => $caption,
-            ]);
-
-        if ($response->failed()) {
-            Log::error('[WhatsApp] sendImage failed', [
-                'status' => $response->status(),
-                'body' => $response->body(),
-                'url' => $url,
-                'number' => $number,
-            ]);
+    protected static function addToQueue(array $item): void
+    {
+        try {
+            $queuePath = storage_path('app/wa_queue.json');
+            $queue = [];
+            
+            if (file_exists($queuePath)) {
+                $content = file_get_contents($queuePath);
+                $queue = json_decode($content, true) ?: [];
+            }
+            
+            $queue[] = $item;
+            
+            file_put_contents($queuePath, json_encode($queue, JSON_PRETTY_PRINT), LOCK_EX);
+        } catch (\Exception $e) {
+            Log::error('[WhatsAppService] Gagal menambahkan pesan ke queue file: ' . $e->getMessage());
         }
     }
 

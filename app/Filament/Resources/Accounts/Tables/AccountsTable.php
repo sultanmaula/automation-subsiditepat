@@ -2,11 +2,15 @@
 
 namespace App\Filament\Resources\Accounts\Tables;
 
+use App\Exceptions\StockExhaustedException;
 use App\Jobs\CancelDuplicateTransactionJob;
+use App\Jobs\NotifyNikChainCompleted;
+use App\Jobs\ProcessNikJob;
 use App\Jobs\VerifyNikTransactionJob;
 use App\Models\Account;
 use App\Models\DataMasterDocument;
 use App\Models\DataNikInput;
+use App\Models\User;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Placeholder;
@@ -20,6 +24,7 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Wizard\Step;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\ViewColumn;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
@@ -31,10 +36,12 @@ use Filament\Tables\Table;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Livewire\Component as LivewireComponent;
 use Throwable;
 
@@ -62,6 +69,9 @@ class AccountsTable
                     ->description(static fn(Account $record): ?string => $record->dataNikInput
                         ? 'NIK: ' . $record->dataNikInput?->nik . ' | File: ' . $record->dataNikInput?->document?->original_name
                         : null),
+                ViewColumn::make('nik_progress')
+                    ->label('Progress Input')
+                    ->view('filament.tables.columns.nik-progress'),
             ])
             ->recordUrl(false)
             ->filters([
@@ -69,29 +79,29 @@ class AccountsTable
             ])
             ->recordActions([
                 ActionGroup::make([
-                    Action::make('toggleAutoRetrieve')
-                        ->label(fn(Account $record): string => $record->auto_retrieve ? 'Auto Retrieve: ON' : 'Auto Retrieve: OFF')
-                        ->icon(fn(Account $record): string => $record->auto_retrieve ? 'heroicon-s-check-circle' : 'heroicon-s-x-circle')
+                    Action::make('toggleAutoInputNik')
+                        ->label(fn(Account $record): string => $record->auto_input_nik ? 'Auto Input NIK: ON' : 'Auto Input NIK: OFF')
+                        ->icon(fn(Account $record): string => $record->auto_input_nik ? 'heroicon-s-check-circle' : 'heroicon-s-x-circle')
                         ->hiddenLabel()
                         ->extraAttributes(fn(Account $record): array => [
-                            'x-tooltip.raw' => $record->auto_retrieve ? 'Auto Retrieve: ON' : 'Auto Retrieve: OFF',
+                            'x-tooltip.raw' => $record->auto_input_nik ? 'Auto Input NIK: ON' : 'Auto Input NIK: OFF',
                         ])
-                        ->color(fn(Account $record): string => $record->auto_retrieve ? 'success' : 'danger')
+                        ->color(fn(Account $record): string => $record->auto_input_nik ? 'success' : 'danger')
                         ->action(function (Account $record): void {
-                            if ($record->auto_retrieve == false && (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL))
+                            if ($record->auto_input_nik == false && (!Cache::get("merchant_api_token_{$record->email}") || Cache::get("merchant_api_token_{$record->email}") == NULL))
                                 Artisan::call('merchant:fetch-token', [
                                     '--email' => $record->email,
                                     '--pin' => $record->pin,
                                 ]);
-                            
+
                             $record->update([
-                                'auto_retrieve' => !$record->auto_retrieve,
+                                'auto_input_nik' => !$record->auto_input_nik,
                             ]);
 
-                            $status = $record->auto_retrieve ? 'diaktifkan' : 'dinonaktifkan';
+                            $status = $record->auto_input_nik ? 'diaktifkan' : 'dinonaktifkan';
 
                             Notification::make()
-                                ->title("Auto Retrieve berhasil {$status}.")
+                                ->title("Auto Input NIK berhasil {$status}.")
                                 ->success()
                                 ->send();
                         }),
@@ -590,6 +600,21 @@ class AccountsTable
                                 $action->cancel();
                             }
                         }),
+                    Action::make('lastInputLog')
+                        ->label('Log Inputan')
+                        ->icon('heroicon-s-clock')
+                        ->hiddenLabel()
+                        ->extraAttributes(['x-tooltip.raw' => 'Log Inputan Terakhir'])
+                        ->color('gray')
+                        ->slideOver()
+                        ->modalHeading(fn(Account $record): string => 'Log Inputan: ' . $record->email)
+                        ->modalSubmitAction(false)
+                        ->modalCancelActionLabel('Tutup')
+                        ->form([
+                            Placeholder::make('last_input_log')
+                                ->hiddenLabel()
+                                ->content(fn(Account $record): HtmlString => new HtmlString(self::renderLastInputLog($record))),
+                        ]),
                     Action::make('inputData')
                         ->label('Input Data')
                         ->icon('heroicon-s-paper-airplane')
@@ -811,45 +836,83 @@ class AccountsTable
                                 return;
                             }
 
-                            foreach ($nikInputs as $nikInput) {
-                                $exitCode = Artisan::call('merchant:verify-nik', [
-                                    'account' => $record->email,
-                                    'nik' => $nikInput->nik,
-                                    '--document-id' => $documentId,
-                                    '--nik-input-id' => $nikInput->id,
-                                ]);
+                            $accountId = (int) $record->id;
+                            $accountEmail = $record->email;
+                            $documentIdInt = (int) $documentId;
+                            $userId = auth()->id();
+                            $total = $nikInputs->count();
 
-                                if ($exitCode !== Command::SUCCESS) {
-                                    $output = trim(Artisan::output());
-                                    $decoded = json_decode($output);
+                            // ID unik untuk satu kali dispatch. Men-scope counter progres
+                            // supaya job run lama yang masih nyangkut tidak menimpa run baru.
+                            $runId = (string) Str::uuid();
 
-                                    if ($decoded?->message === 'Transaksi melebihi stok yang dapat dijual' && $decoded?->code === 400) {
+                            $progressKey = "nik_progress:{$accountId}";
+                            Cache::put($progressKey, [
+                                'run_id'     => $runId,
+                                'total'      => $total,
+                                'done'       => 0,
+                                'status'     => 'running',
+                                'started_at' => now()->toIso8601String(),
+                            ], now()->addHours(2));
+
+                            // Rangkai 1 ProcessNikJob per NIK. Bus::chain menjamin job
+                            // berikutnya hanya dijalankan setelah job sebelumnya selesai,
+                            // sehingga urutan NIK terjaga ketat (1 -> N) berapa pun jumlah worker.
+                            // `position` (1-based) dipakai untuk menghitung progres.
+                            $jobs = [];
+                            foreach ($nikInputs->values() as $i => $nikInput) {
+                                $jobs[] = new ProcessNikJob(
+                                    account_id: $accountId,
+                                    data_master_document_id: $documentIdInt,
+                                    data_nik_input_id: $nikInput->id,
+                                    run_id: $runId,
+                                    position: $i + 1,
+                                    total: $total,
+                                );
+                            }
+
+                            // Job penutup: kirim notif "selesai" saat seluruh rangkaian beres.
+                            $jobs[] = new NotifyNikChainCompleted($accountId, $total, $userId, $runId);
+
+                            // Arahkan ke koneksi 'redis' karena Horizon (worker production)
+                            // hanya memproses queue redis, sedangkan default QUEUE_CONNECTION
+                            // project ini masih 'database' yang tidak di-supervise Horizon.
+                            Bus::chain($jobs)
+                                ->onConnection('redis')
+                                ->catch(function (\Throwable $e) use ($accountEmail, $userId, $progressKey, $runId): void {
+                                    // Hentikan progress bar & tandai kondisi akhir chain.
+                                    $state = Cache::get($progressKey);
+                                    if (is_array($state) && ($state['run_id'] ?? null) === $runId) {
+                                        $state['status'] = $e instanceof StockExhaustedException ? 'stopped' : 'failed';
+                                        Cache::put($progressKey, $state, now()->addMinute());
+                                    }
+
+                                    $user = $userId ? User::find($userId) : null;
+                                    if (! $user) {
+                                        return;
+                                    }
+
+                                    if ($e instanceof StockExhaustedException) {
                                         Notification::make()
                                             ->title('Stok hari ini sudah ter-input semua.')
+                                            ->body("Proses dihentikan untuk akun {$accountEmail} karena stok habis.")
                                             ->success()
-                                            ->send();
+                                            ->sendToDatabase($user);
 
                                         return;
                                     }
 
-                                    if (\Str::startsWith($output, "Verify-NIK request failed") || \Str::startsWith($output, "Invalid verify-nik response") || ($decoded && ($decoded?->code ?? 0) >= 400)) {
-                                        usleep(3000000);
-                                        continue;
-                                    }
-
                                     Notification::make()
-                                        ->title("Gagal memproses NIK {$nikInput->nik}")
-                                        ->body($output !== '' ? $output : null)
+                                        ->title('Proses input NIK terhenti')
+                                        ->body("Terjadi kendala pada akun {$accountEmail}: {$e->getMessage()}")
                                         ->danger()
-                                        ->send();
-
-                                    return;
-                                }
-                                usleep(3000000);
-                            }
+                                        ->sendToDatabase($user);
+                                })
+                                ->dispatch();
 
                             Notification::make()
-                                ->title('Berhasil memproses data NIK terpilih.')
+                                ->title("{$nikInputs->count()} NIK masuk antrian")
+                                ->body('Proses berjalan di background, hasil akan diberitahukan saat selesai.')
                                 ->success()
                                 ->send();
                         }),
@@ -868,7 +931,7 @@ class AccountsTable
                     DeleteBulkAction::make(),
                 ]),
             ])
-            ->poll('1s');
+            ->poll('5s');
     }
 
     protected static function fetchSalesReportData(Account $record, Carbon $start, Carbon $end, ?string $search = null): array
@@ -1284,6 +1347,89 @@ class AccountsTable
 <div style="margin-top: 12px;">
 <span style="font-size: 10px; font-weight: 500; color: #9ca3af;">{$description}</span>
 </div>
+</div>
+HTML;
+    }
+
+    /**
+     * Render response API Pertamina (kolom api_response) sebagai blok collapsible.
+     * JSON dirapikan bila valid; kalau kosong (entri lama sebelum fitur ini)
+     * tampilkan catatan bahwa response tidak tersimpan.
+     */
+    protected static function renderApiResponseBlock(?string $apiResponse): string
+    {
+        if (blank($apiResponse)) {
+            return '<div style="font-size:11px;color:#9ca3af;font-style:italic;margin-top:4px;">Response API tidak tersimpan.</div>';
+        }
+
+        $decoded = json_decode($apiResponse, true);
+        $pretty = json_last_error() === JSON_ERROR_NONE
+            ? json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            : $apiResponse;
+
+        $escaped = e($pretty);
+
+        return <<<HTML
+<details style="margin-top:6px;">
+<summary style="cursor:pointer;font-size:11px;color:#2563eb;user-select:none;">Response API Pertamina</summary>
+<pre style="margin-top:4px;padding:8px;background-color:#0f172a;color:#e2e8f0;border-radius:6px;font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;word-break:break-word;">{$escaped}</pre>
+</details>
+HTML;
+    }
+
+    /**
+     * Render 10 inputan terakhir SATU akun (semua status: sukses/gagal/ditolak)
+     * sebagai HTML untuk slideOver. Tidak ada kolom `status` di tabel — status
+     * diturunkan dari is_failed + rejected_status
+     * (sukses = is_failed=false DAN rejected_status kosong).
+     */
+    protected static function renderLastInputLog(Account $record): string
+    {
+        $histories = $record->nikInputHistories()
+            ->with('document')
+            ->latest('created_at')
+            ->limit(10)
+            ->get();
+
+        if ($histories->isEmpty()) {
+            return '<p style="font-size:14px;color:#6b7280;font-style:italic;">Belum ada input untuk akun ini.</p>';
+        }
+
+        $lastAt = $histories->first()->created_at?->format('d/m H:i') ?? '-';
+
+        $rows = $histories->map(function ($history): string {
+            $time = $history->created_at?->format('d/m H:i') ?? '-';
+            $nik = e($history->nik ?? '-');
+            $document = e($history->document?->original_name ?? '-');
+
+            if ($history->is_failed) {
+                $badge = '<span style="background-color:#fee2e2;color:#b91c1c;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Gagal</span>';
+            } elseif ($history->rejected_status !== null) {
+                $badge = '<span style="background-color:#fef3c7;color:#b45309;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Ditolak: ' . e($history->rejected_status) . '</span>';
+            } else {
+                $badge = '<span style="background-color:#dcfce7;color:#15803d;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Sukses</span>';
+            }
+
+            $responseHtml = self::renderApiResponseBlock($history->api_response);
+
+            return <<<HTML
+<div style="padding:8px 0;border-bottom:1px solid #e5e7eb;">
+<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+<div style="min-width:0;">
+<div style="font-size:13px;font-family:ui-monospace,monospace;color:#111827;">{$nik}</div>
+<div style="font-size:11px;color:#6b7280;">{$time} WIB &middot; {$document}</div>
+</div>
+<div style="flex-shrink:0;">{$badge}</div>
+</div>
+{$responseHtml}
+</div>
+HTML;
+        })->implode('');
+
+        return <<<HTML
+<div style="max-height:70vh;overflow-y:auto;">
+<div style="font-size:12px;color:#6b7280;margin-bottom:8px;">Terakhir input: <span style="font-family:ui-monospace,monospace;font-weight:600;">{$lastAt} WIB</span></div>
+{$rows}
 </div>
 HTML;
     }

@@ -207,7 +207,41 @@ return [
             'maxJobs' => 0,
             'memory' => 128,
             'tries' => 1,
+            // 150 (bukan 60) supaya worker tidak dibunuh saat ProcessNikJob
+            // menunggu fetch token Puppeteer (Process timeout 120s + overhead).
+            // Harus selalu < retry_after koneksi redis di config/queue.php (180).
+            'timeout' => 150,
+            'nice' => 0,
+        ],
+
+        // Pool terpisah khusus job Data Generator Random supaya tidak
+        // berebut worker dengan ProcessNikJob di queue 'default'.
+        'supervisor-random' => [
+            'connection' => 'redis',
+            'queue' => ['random-nik'],
+            'balance' => 'auto',
+            'autoScalingStrategy' => 'time',
+            'maxProcesses' => 1,
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 128,
+            'tries' => 1,
             'timeout' => 60,
+            'nice' => 0,
+        ],
+
+        // Pool khusus fetch token via Puppeteer — maxProcesses 1 supaya
+        // tidak pernah ada lebih dari 1 instance Chromium berjalan.
+        'supervisor-fetch-token' => [
+            'connection' => 'redis',
+            'queue' => ['fetch-token'],
+            'balance' => 'simple',
+            'maxProcesses' => 1,
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 256,
+            'tries' => 1,
+            'timeout' => 150,
             'nice' => 0,
         ],
     ],
@@ -215,15 +249,35 @@ return [
     'environments' => [
         'production' => [
             'supervisor-1' => [
+                // Bus::chain hanya menaruh 1 job pending per akun, dan job yang
+                // kena rate-limit parkir di zona delayed — auto-scaler melihat
+                // antrian "kosong" lalu menyusut ke 1 worker sehingga 5 chain
+                // akun antre di worker yang sama. minProcesses 5 menjamin
+                // 1 worker per akun aktif.
+                'minProcesses' => 5,
                 'maxProcesses' => 10,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
+            ],
+            'supervisor-random' => [
+                'maxProcesses' => 3,
+                'balanceMaxShift' => 1,
+                'balanceCooldown' => 3,
+            ],
+            'supervisor-fetch-token' => [
+                'maxProcesses' => 1,
             ],
         ],
 
         'local' => [
             'supervisor-1' => [
                 'maxProcesses' => 3,
+            ],
+            'supervisor-random' => [
+                'maxProcesses' => 1,
+            ],
+            'supervisor-fetch-token' => [
+                'maxProcesses' => 1,
             ],
         ],
     ],

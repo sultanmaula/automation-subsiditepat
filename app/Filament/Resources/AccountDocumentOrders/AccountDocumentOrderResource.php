@@ -2,8 +2,6 @@
 
 namespace App\Filament\Resources\AccountDocumentOrders;
 
-use App\Filament\Resources\AccountDocumentOrders\Pages\CreateAccountDocumentOrder;
-use App\Filament\Resources\AccountDocumentOrders\Pages\EditAccountDocumentOrder;
 use App\Filament\Resources\AccountDocumentOrders\Pages\ListAccountDocumentOrders;
 use App\Filament\Resources\AccountDocumentOrders\Schemas\AccountDocumentOrderForm;
 use App\Filament\Resources\AccountDocumentOrders\Tables\AccountDocumentOrdersTable;
@@ -43,8 +41,6 @@ class AccountDocumentOrderResource extends Resource
     {
         return [
             'index' => ListAccountDocumentOrders::route('/'),
-            'create' => CreateAccountDocumentOrder::route('/create'),
-            'edit' => EditAccountDocumentOrder::route('/{record}/edit'),
         ];
     }
 }

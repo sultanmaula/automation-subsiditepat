@@ -18,6 +18,8 @@ use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -96,7 +98,7 @@ class ListDataNikInputs extends ListRecords
                         ->numeric()
                         ->default(200)
                         ->minValue(1)
-                        ->maxValue(5000),
+                        ->maxValue(15000),
                 ])
                 ->action(function (array $data): void {
                     $account = Account::query()->find($data['account_id'] ?? null);
@@ -127,7 +129,7 @@ class ListDataNikInputs extends ListRecords
                     }
 
                     $amount = (int) ($data['amount'] ?? 200);
-                    $amount = max(1, min($amount, 5000));
+                    $amount = max(1, min($amount, 15000));
 
                     $documentMode = $data['document_mode'] ?? 'new';
                     $document = null;
@@ -199,8 +201,37 @@ class ListDataNikInputs extends ListRecords
                         return;
                     }
 
+                    // Pastikan token SUDAH SIAP (sinkron) sebelum men-dispatch batch.
+                    // Mencegah ribuan job serempak menempuh jalur release() saat token
+                    // kosong -> penyebab utama ledakan MaxAttemptsExceeded sebelumnya.
+                    if (! Cache::get("merchant_api_token_{$account->email}")) {
+                        Artisan::call('merchant:fetch-token', [
+                            '--email' => $account->email,
+                            '--pin'   => $account->pin,
+                        ]);
+                    }
+
+                    if (! Cache::get("merchant_api_token_{$account->email}")) {
+                        Notification::make()
+                            ->title('Gagal mengambil token merchant.')
+                            ->body('Generate dibatalkan. Silakan coba lagi beberapa saat.')
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    // Stagger dispatch: tiap job dijadwalkan berjarak ~6 detik (≈10/menit/akun,
+                    // sesuai batas aman API verify-nik). Job menunggu di delayed-set Redis
+                    // tanpa menyandera worker -> tidak perlu sleep() di dalam job, dan tidak
+                    // ada release-spinning yang menghabiskan attempts.
+                    $spacingSeconds = 6;
                     foreach (array_values($nikList) as $index => $nik) {
-                        GenerateRandomNikJob::dispatch($account->id, $document->id, $nik)->delay(now()->addSeconds(6));
+                        // Paksa ke koneksi 'redis' karena Horizon hanya men-supervise redis.
+                        GenerateRandomNikJob::dispatch($account->id, $document->id, $nik)
+                            ->onConnection('redis')
+                            ->onQueue('random-nik')
+                            ->delay(now()->addSeconds(($index + 1) * $spacingSeconds));
                     }
 
                     Notification::make()
