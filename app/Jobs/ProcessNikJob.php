@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Console\Commands\AutoInputNikCommand;
+use App\Helpers\NikRegionHelper;
 use App\Exceptions\AccountDailyLimitException;
 use App\Exceptions\NikBlockedException;
 use App\Exceptions\NikNotRegisteredException;
@@ -408,6 +409,7 @@ class ProcessNikJob implements ShouldQueue
             }
 
             $verifyData = $this->verifyNik($bearerToken, $nikInput->nik, $account);
+            $this->registerNikIfNeeded($bearerToken, $nikInput->nik, $verifyData, $account);
             $submitResponse = $this->submitTransaction($bearerToken, $nikInput->nik, $verifyData, $account);
         } catch (StockExhaustedException $e) {
             // Pertamina menolak transaksi NIK ini karena stok "yang dapat
@@ -804,6 +806,75 @@ class ProcessNikJob implements ShouldQueue
         }
 
         return $data;
+    }
+
+    /**
+     * Ekstrak tanggal lahir dari NIK (digit 7-12).
+     * Digit 7-8 = hari, 9-10 = bulan, 11-12 = tahun (2 digit).
+     * Tahun: jika > dua digit terakhir tahun sekarang → 19xx, else → 20xx.
+     */
+    protected function extractDobFromNik(string $nik): string
+    {
+        $day   = (int) substr($nik, 6, 2);
+        $month = substr($nik, 8, 2);
+        $year2 = (int) substr($nik, 10, 2);
+
+        // Perempuan: digit hari di NIK ditambah 40 → kurangi kembali
+        if ($day > 40) {
+            $day -= 40;
+        }
+
+        $year = $year2 > (int) date('y') ? (1900 + $year2) : (2000 + $year2);
+
+        return sprintf('%04d-%s-%02d', $year, $month, $day);
+    }
+
+    /**
+     * Jika salah satu field agreement belum terpenuhi, hit API registrasi
+     * supaya konsumen terdaftar sebelum transaksi dilanjutkan.
+     */
+    protected function registerNikIfNeeded(string $bearerToken, string $nik, array $verifyData, Account $account): void
+    {
+        $allAgreed = ($verifyData['isAgreedAgreement'] ?? false) === true
+            && ($verifyData['isAgreedReceiveInformation'] ?? false) === true
+            && ($verifyData['isAgreedTerms'] ?? false) === true
+            && ($verifyData['isAgreedTermsConditions'] ?? false) === true
+            && ($verifyData['isCompleted'] ?? false) === true;
+
+        if ($allAgreed) {
+            return;
+        }
+
+        $dob = $this->extractDobFromNik($nik);
+        $pob = NikRegionHelper::getCityName($nik) ?? 'Jombang';
+
+        Log::info('[NIK] Hit API registrasi (ada field agreement belum lengkap)', [
+            'account_id' => $this->account_id,
+            'nik'        => $nik,
+            'dob'        => $dob,
+            'pob'        => $pob,
+        ]);
+
+        $res = Http::withHeaders($this->browserHeaders($bearerToken))
+            ->post(
+                'https://api-map.my-pertamina.id/customers/v3/registration/' . $nik . '/Rumah%20Tangga',
+                ['pob' => $pob, 'dob' => $dob],
+            );
+
+        if ($res->failed()) {
+            Log::warning('[NIK] API registrasi gagal, tetap lanjut ke submit', [
+                'account_id' => $this->account_id,
+                'nik'        => $nik,
+                'http_status' => $res->status(),
+                'response'   => $res->body(),
+            ]);
+        } else {
+            Log::info('[NIK] API registrasi berhasil', [
+                'account_id' => $this->account_id,
+                'nik'        => $nik,
+                'response'   => $res->body(),
+            ]);
+        }
     }
 
     protected function submitTransaction(

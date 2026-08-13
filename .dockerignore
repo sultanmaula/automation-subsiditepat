@@ -1,6 +1,7 @@
 .git
 .env
 .config
+.cache
 node_modules
 vendor
 storage
