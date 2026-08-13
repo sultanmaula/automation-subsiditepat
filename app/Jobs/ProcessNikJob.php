@@ -830,8 +830,9 @@ class ProcessNikJob implements ShouldQueue
     }
 
     /**
-     * Jika salah satu field agreement belum terpenuhi, hit API registrasi
-     * supaya konsumen terdaftar sebelum transaksi dilanjutkan.
+     * Jika salah satu field agreement belum terpenuhi, hit API policy (3x GET)
+     * lalu POST terms-consent, kemudian hit API registrasi supaya konsumen
+     * terdaftar sebelum transaksi dilanjutkan.
      */
     protected function registerNikIfNeeded(string $bearerToken, string $nik, array $verifyData, Account $account): void
     {
@@ -845,10 +846,58 @@ class ProcessNikJob implements ShouldQueue
             return;
         }
 
+        Log::info('[NIK] Ada field agreement belum lengkap, mulai alur policy+consent+registrasi', [
+            'account_id' => $this->account_id,
+            'nik'        => $nik,
+        ]);
+
+        // Step 1: GET policy untuk 3 contentType (seolah-olah pengguna membaca policy)
+        foreach ([1, 2, 3] as $contentType) {
+            $policyRes = Http::withHeaders($this->browserHeaders($bearerToken))->get(
+                'https://api-map.my-pertamina.id/general/agreement/v1/policy',
+                ['userType' => '3', 'contentType' => (string) $contentType],
+            );
+
+            Log::info('[NIK] GET policy', [
+                'account_id'  => $this->account_id,
+                'nik'         => $nik,
+                'contentType' => $contentType,
+                'http_status' => $policyRes->status(),
+            ]);
+        }
+
+        // Step 2: POST terms-consent (menyetujui agreement & terms)
+        $consentRes = Http::withHeaders($this->browserHeaders($bearerToken))
+            ->post(
+                'https://api-map.my-pertamina.id/general/customer-service/v1/terms-consent',
+                [
+                    'customerType'       => 'Rumah Tangga',
+                    'historyIdAgreement' => 20,
+                    'historyIdTerm'      => 19,
+                    'nationalityId'      => $nik,
+                ],
+            );
+
+        if ($consentRes->failed()) {
+            Log::warning('[NIK] POST terms-consent gagal, tetap lanjut ke registrasi', [
+                'account_id'  => $this->account_id,
+                'nik'         => $nik,
+                'http_status' => $consentRes->status(),
+                'response'    => $consentRes->body(),
+            ]);
+        } else {
+            Log::info('[NIK] POST terms-consent berhasil', [
+                'account_id' => $this->account_id,
+                'nik'        => $nik,
+                'response'   => $consentRes->body(),
+            ]);
+        }
+
+        // Step 3: POST registrasi
         $dob = $this->extractDobFromNik($nik);
         $pob = NikRegionHelper::getCityName($nik) ?? 'Jombang';
 
-        Log::info('[NIK] Hit API registrasi (ada field agreement belum lengkap)', [
+        Log::info('[NIK] Hit API registrasi', [
             'account_id' => $this->account_id,
             'nik'        => $nik,
             'dob'        => $dob,
@@ -863,10 +912,10 @@ class ProcessNikJob implements ShouldQueue
 
         if ($res->failed()) {
             Log::warning('[NIK] API registrasi gagal, tetap lanjut ke submit', [
-                'account_id' => $this->account_id,
-                'nik'        => $nik,
+                'account_id'  => $this->account_id,
+                'nik'         => $nik,
                 'http_status' => $res->status(),
-                'response'   => $res->body(),
+                'response'    => $res->body(),
             ]);
         } else {
             Log::info('[NIK] API registrasi berhasil', [
