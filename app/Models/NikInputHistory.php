@@ -10,8 +10,33 @@ class NikInputHistory extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'input_date' => 'date',
+        'input_date'  => 'date',
+        'is_failed'   => 'boolean',
+        'rejected_at' => 'datetime',
     ];
+
+    /* =========================
+     * INVARIANT
+     * ========================= */
+
+    /**
+     * Baris ber-`rejected_status` SELALU is_failed = true.
+     *
+     * Penolakan Pertamina (TRANSACTION_INVALID / TRANSACTION_ANOMALY dst)
+     * bukan pembelian. Beberapa penghitung lama hanya memfilter
+     * `is_failed = false` tanpa melihat rejected_status, sehingga baris
+     * ditolak sempat terhitung sukses. Invarian dijaga di model supaya
+     * berlaku untuk SEMUA jalur tulis (job, command, panel admin).
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $history): void {
+            if (filled($history->rejected_status)) {
+                $history->is_failed = true;
+                $history->rejected_at ??= now();
+            }
+        });
+    }
 
     /* =========================
      * RELATIONSHIPS

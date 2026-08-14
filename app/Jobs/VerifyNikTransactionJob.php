@@ -51,9 +51,11 @@ class VerifyNikTransactionJob implements ShouldQueue
 
     protected function verifyNik(string $bearerToken, string $nik): array
     {
+        // Endpoint customer-service — lihat alasannya di ProcessNikJob::verifyNik().
+        // Token dari /customers/v2/verify-nik ditolak 406 oleh submit transaksi.
         $response = Http::withHeaders([
             'Authorization' => 'Bearer ' . $bearerToken,
-        ])->get('https://api-map.my-pertamina.id/customers/v2/verify-nik', [
+        ])->get('https://api-map.my-pertamina.id/general/customer-service/v1/verify-nik', [
             'nationalityId' => $nik,
         ]);
 
@@ -88,7 +90,7 @@ class VerifyNikTransactionJob implements ShouldQueue
             'category' => $verifyData['customerTypes'][0]['name'] ?? 'Rumah Tangga',
             'sourceTypeId' => '1',
             'name' => (string) $verifyData['name'],
-            'channelinject' => $verifyData['channelInject'] ?? 'tnp2k',
+            'channelInject' => $verifyData['channelInject'] ?? 'tnp2k',
         ];
 
         $response = $this->postMultipartWithCurl('https://api-map.my-pertamina.id/general/v3/transactions', $formData, [

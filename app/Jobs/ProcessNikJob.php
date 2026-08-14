@@ -409,7 +409,15 @@ class ProcessNikJob implements ShouldQueue
             }
 
             $verifyData = $this->verifyNik($bearerToken, $nikInput->nik, $account);
-            $this->registerNikIfNeeded($bearerToken, $nikInput->nik, $verifyData, $account);
+
+            // Consent/registrasi menghanguskan token verify sebelumnya -> ambil
+            // token baru sebelum submit, persis seperti web resmi (urutan
+            // request devtools 13 Ags: consent -> verify-nik -> transactions).
+            // Tanpa verify ulang, submit dibalas 406 TRANSACTION_TIMEOUT.
+            if ($this->registerNikIfNeeded($bearerToken, $nikInput->nik, $verifyData, $account)) {
+                $verifyData = $this->verifyNik($bearerToken, $nikInput->nik, $account);
+            }
+
             $submitResponse = $this->submitTransaction($bearerToken, $nikInput->nik, $verifyData, $account);
         } catch (StockExhaustedException $e) {
             // Pertamina menolak transaksi NIK ini karena stok "yang dapat
@@ -591,7 +599,8 @@ class ProcessNikJob implements ShouldQueue
 
             // Tidak disimpan ke history: error generic dianggap transient
             // (mis. outage 500 Pertamina), NIK akan dicoba lagi di run
-            // berikutnya. Flag is_failed hanya untuk NikBlockedException.
+            // berikutnya. Flag is_failed hanya untuk penolakan tegas Pertamina
+            // (NikBlockedException / NikNotRegistered / ber-rejected_status).
             $this->markDailyFailure($nikInput->nik);
             $this->markProgress();
             // Klaim dilepas: NIK ini gagal transient dan akan dicoba lagi di run
@@ -646,10 +655,12 @@ class ProcessNikJob implements ShouldQueue
     /**
      * Simpan history input NIK hari ini (safe terhadap unique constraint).
      *
-     * is_failed=true dipakai HANYA untuk NIK yang ditolak permanen oleh
-     * Pertamina (NikBlockedException, mis. isBlocked Dukcapil) -> tidak
-     * dihitung stok terpakai, tapi tercatat sehingga run berikutnya bulan
-     * ini langsung skip NIK tersebut. Error generic/transient tidak dicatat.
+     * is_failed=true dipakai untuk NIK yang ditolak Pertamina: blokir permanen
+     * (NikBlockedException, mis. isBlocked Dukcapil) MAUPUN penolakan
+     * ber-rejected_status (kuota habis / TRANSACTION_ANOMALY). Semuanya bukan
+     * pembelian, jadi tidak boleh dihitung sebagai input sukses; barisnya tetap
+     * dicatat supaya run berikutnya bulan ini langsung skip NIK tersebut.
+     * Error generic/transient tidak dicatat.
      */
     protected function saveHistory(
         DataNikInput $nikInput,
@@ -670,7 +681,7 @@ class ProcessNikJob implements ShouldQueue
                     'data_master_document_id' => $this->data_master_document_id,
                     'data_nik_input_id'       => $nikInput->id,
                     'input_month'             => $month,
-                    'is_failed'               => $isFailed,
+                    'is_failed'               => $isFailed || filled($rejectedStatus),
                     'rejected_status'         => $rejectedStatus,
                     'rejected_at'             => $rejectedStatus ? now() : null,
                     'api_response'            => $apiResponse,
@@ -797,8 +808,23 @@ class ProcessNikJob implements ShouldQueue
 
     protected function verifyNik(string $bearerToken, string $nik, Account $account): array
     {
+        // WAJIB endpoint customer-service, BUKAN `/customers/v2/verify-nik`.
+        //
+        // Keduanya membalas 200 dengan bentuk mirip, tapi `token` dan
+        // `familyIdEncrypted` yang diterbitkan endpoint lama DITOLAK oleh
+        // POST /general/v3/transactions sejak 13 Ags 2026 06:06 WIB — HTTP 406
+        // `TRANSACTION_TIMEOUT` (body-nya menulis `code: 400`). Terbukti 13 Ags:
+        // payload, header, body multipart, HTTP/2, IP, dan akun sudah disamakan
+        // persis dengan web resmi dan tetap 406; begitu token diambil dari
+        // endpoint ini, submit yang sama langsung 200 OK.
+        //
+        // Peta endpoint web resmi (bundle /merchant/_next/.../_app-*.js):
+        //   "/verify-nik-v2" => "/general/customer-service/v1/verify-nik"
+        // Endpoint ini juga mengembalikan field yang tidak ada di versi lama:
+        // isAgreedAgreement, isAgreedTerms, isAgreedReceiveInformation,
+        // limitRemaining, isKtpRequired, isDukcapilRequired.
         $res = Http::withHeaders($this->browserHeaders($bearerToken))->get(
-            'https://api-map.my-pertamina.id/customers/v2/verify-nik',
+            'https://api-map.my-pertamina.id/general/customer-service/v1/verify-nik',
             ['nationalityId' => $nik]
         );
 
@@ -864,12 +890,15 @@ class ProcessNikJob implements ShouldQueue
     }
 
     /**
-     * Jika konsumen belum selesai terdaftar (`isCompleted` false), hit API
-     * policy (3x GET) lalu POST terms-consent, kemudian hit API registrasi
-     * supaya konsumen terdaftar sebelum transaksi dilanjutkan. Kalau sudah
-     * `isCompleted` true, langsung lanjut ke submit transaksi.
+     * Pastikan konsumen sudah menyetujui agreement & terdaftar lengkap sebelum
+     * transaksi: GET policy 3x, POST terms-consent, lalu PUT registrasi.
+     *
+     * @return bool true kalau alur di atas dijalankan — pemanggil WAJIB
+     *              verify-nik ULANG sesudahnya, karena token dari verify
+     *              sebelumnya sudah tidak berlaku (submit akan dibalas
+     *              TRANSACTION_TIMEOUT kalau tetap dipakai).
      */
-    protected function registerNikIfNeeded(string $bearerToken, string $nik, array $verifyData, Account $account): void
+    protected function registerNikIfNeeded(string $bearerToken, string $nik, array $verifyData, Account $account): bool
     {
         // Kanal 'nik' punya level sendiri (default debug); LOG_LEVEL global di
         // produksi = error sehingga Log::info/warning biasa tidak pernah
@@ -884,26 +913,33 @@ class ProcessNikJob implements ShouldQueue
             'isCompleted'                => $verifyData['isCompleted'] ?? null,
         ];
 
-        // Gerbang registrasi = `isCompleted` SAJA (13 Ags 2026).
+        // Gerbang = KELIMA field harus true (13 Ags 2026, revisi kedua).
         //
-        // Sebelumnya kelima field di atas harus true. Syarat itu tidak pernah
-        // bisa tercapai: verify-nik konsisten membalas null untuk
-        // isAgreedAgreement, isAgreedReceiveInformation, dan isAgreedTerms —
-        // 98 sampel hari ini, dan tetap null setelah registrasi PUT dijawab
-        // 200 OK. Akibatnya alur policy+consent+registrasi jalan untuk SETIAP
-        // NIK di SETIAP percobaan (+5 request per NIK) tanpa pernah mengubah
-        // apa pun, menambah paparan ke anti-abuse Pertamina tanpa hasil.
-        $isCompleted = ($verifyData['isCompleted'] ?? false) === true;
+        // Sempat dipersempit jadi `isCompleted` saja, karena endpoint verify
+        // lama (`/customers/v2/verify-nik`) selalu membalas null untuk
+        // isAgreedAgreement/isAgreedTerms/isAgreedReceiveInformation sehingga
+        // syarat "semua true" mustahil tercapai. Endpoint customer-service yang
+        // sekarang dipakai (lihat verifyNik()) mengisi ketiganya dengan boolean
+        // sungguhan, jadi gerbang aslinya kembali dipakai — dan memang perlu:
+        // NIK dengan isCompleted=true tapi agreement false DITOLAK submit
+        // (406 TRANSACTION_TIMEOUT), sedangkan NIK dengan agreement true lolos.
+        // Terbukti 13 Ags: 3517075911590002 (semua true) -> 200 OK;
+        // 3517077006750001 & 3517076103900007 (agreement false) -> 406.
+        $allAgreed = ($verifyData['isAgreedAgreement'] ?? false) === true
+            && ($verifyData['isAgreedReceiveInformation'] ?? false) === true
+            && ($verifyData['isAgreedTerms'] ?? false) === true
+            && ($verifyData['isAgreedTermsConditions'] ?? false) === true
+            && ($verifyData['isCompleted'] ?? false) === true;
 
         $log->debug('[NIK] Cek status registrasi konsumen', [
-            'account_id'   => $this->account_id,
-            'nik'          => $nik,
-            'flags'        => $flags,
-            'is_completed' => $isCompleted,
+            'account_id' => $this->account_id,
+            'nik'        => $nik,
+            'flags'      => $flags,
+            'all_agreed' => $allAgreed,
         ]);
 
-        if ($isCompleted) {
-            return;
+        if ($allAgreed) {
+            return false;
         }
 
         $log->info('[NIK] Ada field agreement belum lengkap, mulai alur policy+consent+registrasi', [
@@ -988,6 +1024,8 @@ class ProcessNikJob implements ShouldQueue
                 'response'   => $res->body(),
             ]);
         }
+
+        return true;
     }
 
     protected function submitTransaction(
@@ -1004,8 +1042,16 @@ class ProcessNikJob implements ShouldQueue
             'category'          => $verifyData['customerTypes'][0]['name'] ?? 'Rumah Tangga',
             'sourceTypeId'      => '1',
             'name'              => (string) $verifyData['name'],
-            'channelinject'     => $verifyData['channelInject'] ?? 'tnp2k',
-            'coordinate'         => $verifyData['coordinate'] ?? '-,-',
+            // `channelInject` — HURUF I BESAR. Ditulis `channelinject` sejak awal
+            // dan lama diterima, tapi sejak 13 Ags 2026 06:06 WIB Pertamina
+            // menolak payload-nya dengan HTTP 406 `TRANSACTION_TIMEOUT`
+            // (body-nya menulis `code: 400`, jangan tertukar). Capture devtools
+            // web resmi hari itu: `channelInject` -> 200 OK.
+            //
+            // `coordinate` selalu `-,-`: verify-nik tidak pernah mengirim
+            // koordinat, dan web resmi pun mengirim `-,-`.
+            'channelInject'     => $verifyData['channelInject'] ?? 'tnp2k',
+            'coordinate'        => $verifyData['coordinate'] ?? '-,-',
         ];
 
         $res = Http::withHeaders($this->browserHeaders($bearerToken))->asMultipart()->post(
@@ -1044,7 +1090,11 @@ class ProcessNikJob implements ShouldQueue
         $this->assertNotRejected($json, 'Submit-transaction ditolak', $res->body());
 
         if (($json['code'] ?? null) !== 200 || ($json['status'] ?? null) !== 'OK') {
-            throw new RuntimeException(json_encode($json));
+            // Status HTTP ikut dicatat: `code` di body TIDAK selalu sama dengan
+            // status HTTP sebenarnya, dan untuk TRANSACTION_TIMEOUT (yang datang
+            // massal 13 Ags 2026) perlu dibedakan apakah ini penolakan 400 biasa
+            // atau throttle 429 yang menyamar.
+            throw new RuntimeException('HTTP ' . $res->status() . ' ' . json_encode($json));
         }
 
         // Response mentah sukses -> disimpan ke history (kolom api_response).

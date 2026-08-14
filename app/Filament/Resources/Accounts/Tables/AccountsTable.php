@@ -1402,10 +1402,13 @@ HTML;
             $nik = e($history->nik ?? '-');
             $document = e($history->document?->original_name ?? '-');
 
-            if ($history->is_failed) {
-                $badge = '<span style="background-color:#fee2e2;color:#b91c1c;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Gagal</span>';
-            } elseif ($history->rejected_status !== null) {
+            // rejected_status diperiksa lebih dulu: baris ditolak sekarang juga
+            // ber-is_failed=true, jadi urutan terbalik akan menyembunyikan
+            // alasan penolakannya di balik badge "Gagal" generik.
+            if (filled($history->rejected_status)) {
                 $badge = '<span style="background-color:#fef3c7;color:#b45309;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Ditolak: ' . e($history->rejected_status) . '</span>';
+            } elseif ($history->is_failed) {
+                $badge = '<span style="background-color:#fee2e2;color:#b91c1c;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Gagal</span>';
             } else {
                 $badge = '<span style="background-color:#dcfce7;color:#15803d;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap;">Sukses</span>';
             }
