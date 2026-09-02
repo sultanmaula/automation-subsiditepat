@@ -6,6 +6,7 @@ use App\Http\Middleware\FilamentAuthenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use App\Filament\Workshop\Pages\ProductFinder;
 use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
@@ -35,6 +36,7 @@ class WorkshopPanelProvider extends PanelProvider
             ->discoverPages(in: app_path('Filament/Workshop/Pages'), for: 'App\\Filament\\Workshop\\Pages')
             ->pages([
                 Dashboard::class,
+                ProductFinder::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Workshop/Widgets'), for: 'App\\Filament\\Workshop\\Widgets')
             ->widgets([

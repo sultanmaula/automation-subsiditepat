@@ -35,6 +35,16 @@ class ProductsTable
                     ->label('Stok')
                     ->sortable()
                     ->color(fn (Product $record): string => $record->stock <= $record->min_stock ? 'danger' : 'success'),
+                TextColumn::make('location')
+                    ->label('Lokasi')
+                    ->searchable()
+                    ->placeholder('-')
+                    ->icon('heroicon-o-map-pin')
+                    ->iconColor('warning'),
+                TextColumn::make('compatible_models')
+                    ->label('Kompatibel')
+                    ->badge()
+                    ->placeholder('-'),
                 IconColumn::make('is_active')
                     ->label('Aktif')
                     ->boolean(),

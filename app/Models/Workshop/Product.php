@@ -21,12 +21,18 @@ class Product extends Model
         'min_stock',
         'is_active',
         'description',
+        'is_quick_sale',
+        'quick_sort',
+        'location',
+        'compatible_models',
     ];
 
     protected $casts = [
         'cost_price' => 'decimal:2',
         'sale_price' => 'decimal:2',
         'is_active' => 'boolean',
+        'is_quick_sale' => 'boolean',
+        'compatible_models' => 'array',
     ];
 
     public function category(): BelongsTo

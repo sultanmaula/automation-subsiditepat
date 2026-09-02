@@ -3,6 +3,7 @@
 namespace App\Filament\Workshop\Resources\Products\Schemas;
 
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
@@ -41,6 +42,14 @@ class ProductForm
                         Toggle::make('is_active')
                             ->label('Aktif')
                             ->default(true),
+                        Toggle::make('is_quick_sale')
+                            ->label('Tampilkan di Quick POS')
+                            ->default(false),
+                        TextInput::make('quick_sort')
+                            ->label('Urutan Quick POS')
+                            ->numeric()
+                            ->minValue(0)
+                            ->default(0),
                         TextInput::make('cost_price')
                             ->label('Harga Modal')
                             ->numeric()
@@ -61,6 +70,16 @@ class ProductForm
                             ->numeric()
                             ->minValue(0)
                             ->default(0),
+                        TextInput::make('location')
+                            ->label('Lokasi Barang')
+                            ->placeholder('cth: Laci biru no.3 / Rak A baris 2 / Kotak dekat pintu')
+                            ->maxLength(255)
+                            ->columnSpanFull(),
+                        TagsInput::make('compatible_models')
+                            ->label('Kompatibel dengan Motor')
+                            ->placeholder('Ketik nama motor lalu Enter...')
+                            ->splitKeys(['Tab', ','])
+                            ->columnSpanFull(),
                         Textarea::make('description')
                             ->label('Catatan')
                             ->rows(3)
