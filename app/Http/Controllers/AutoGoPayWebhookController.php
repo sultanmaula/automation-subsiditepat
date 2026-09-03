@@ -10,16 +10,17 @@ class AutoGoPayWebhookController extends Controller
 {
     public function __invoke(Request $request, AutoGoPayService $service)
     {
-        // Handle GET request untuk verification
-        if ($request->isMethod('get')) {
-            return response()->json(['message' => 'ok']);
-        }
-
         $payload   = $request->getContent();
         $signature = $request->header('X-Signature', '');
 
+        // Verify signature untuk semua request (GET dan POST)
         if (! $service->verifyWebhookSignature($payload, $signature)) {
             return response()->json(['message' => 'Invalid signature'], 401);
+        }
+
+        // Handle GET request untuk verification (setelah signature valid)
+        if ($request->isMethod('get')) {
+            return response()->json(['message' => 'ok']);
         }
 
         $data          = json_decode($payload, true);
