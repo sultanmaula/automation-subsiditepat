@@ -13,8 +13,20 @@ class AutoGoPayWebhookController extends Controller
         $payload   = $request->getContent();
         $signature = $request->header('X-Signature', '');
 
+        // Log untuk debugging
+        \Log::info('AutoGoPay Webhook Request', [
+            'method' => $request->method(),
+            'payload' => $payload,
+            'signature' => $signature,
+            'headers' => $request->headers->all(),
+        ]);
+
         // Verify signature untuk semua request (GET dan POST)
         if (! $service->verifyWebhookSignature($payload, $signature)) {
+            \Log::error('AutoGoPay Webhook Signature Invalid', [
+                'payload' => $payload,
+                'signature' => $signature,
+            ]);
             return response()->json(['message' => 'Invalid signature'], 401);
         }
 

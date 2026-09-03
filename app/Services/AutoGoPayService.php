@@ -63,6 +63,16 @@ class AutoGoPayService
     public function verifyWebhookSignature(string $payload, string $signature): bool
     {
         $expected = hash_hmac('sha256', $payload, $this->apiKey);
+
+        Log::info('AutoGoPay Signature Verification', [
+            'payload_length' => strlen($payload),
+            'api_key_set' => !empty($this->apiKey),
+            'api_key_length' => strlen($this->apiKey),
+            'expected_signature' => $expected,
+            'received_signature' => $signature,
+            'match' => hash_equals($expected, $signature),
+        ]);
+
         return hash_equals($expected, $signature);
     }
 }
