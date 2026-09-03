@@ -7,10 +7,13 @@ use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
 use App\Filament\Workshop\Pages\ProductFinder;
-use Filament\Pages\Dashboard;
+use App\Filament\Workshop\Pages\WorkshopDashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
+use App\Filament\Workshop\Widgets\LowStockWidget;
+use App\Filament\Workshop\Widgets\RecentSalesWidget;
+use App\Filament\Workshop\Widgets\WorkshopStatsWidget;
 use Filament\Widgets\AccountWidget;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -35,12 +38,15 @@ class WorkshopPanelProvider extends PanelProvider
             ->discoverResources(in: app_path('Filament/Workshop/Resources'), for: 'App\\Filament\\Workshop\\Resources')
             ->discoverPages(in: app_path('Filament/Workshop/Pages'), for: 'App\\Filament\\Workshop\\Pages')
             ->pages([
-                Dashboard::class,
+                WorkshopDashboard::class,
                 ProductFinder::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Workshop/Widgets'), for: 'App\\Filament\\Workshop\\Widgets')
             ->widgets([
                 AccountWidget::class,
+                WorkshopStatsWidget::class,
+                RecentSalesWidget::class,
+                LowStockWidget::class,
             ])
             ->middleware([
                 EncryptCookies::class,

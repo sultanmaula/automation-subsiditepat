@@ -15,9 +15,9 @@ class ProductForm
     public static function configure(Schema $schema): Schema
     {
         return $schema
+            ->columns(2)
             ->components([
                 Section::make('Informasi Produk')
-                    ->columns(2)
                     ->schema([
                         TextInput::make('name')
                             ->label('Nama Produk')
@@ -39,17 +39,6 @@ class ProductForm
                             ->default('pcs')
                             ->required()
                             ->maxLength(20),
-                        Toggle::make('is_active')
-                            ->label('Aktif')
-                            ->default(true),
-                        Toggle::make('is_quick_sale')
-                            ->label('Tampilkan di Quick POS')
-                            ->default(false),
-                        TextInput::make('quick_sort')
-                            ->label('Urutan Quick POS')
-                            ->numeric()
-                            ->minValue(0)
-                            ->default(0),
                         TextInput::make('cost_price')
                             ->label('Harga Modal')
                             ->numeric()
@@ -70,21 +59,35 @@ class ProductForm
                             ->numeric()
                             ->minValue(0)
                             ->default(0),
+                    ])
+                    ->columns(2),
+
+                Section::make('Pengaturan')
+                    ->schema([
+                        Toggle::make('is_active')
+                            ->label('Aktif')
+                            ->default(true),
+                        Toggle::make('is_quick_sale')
+                            ->label('Tampilkan di Quick POS')
+                            ->default(false),
+                        TextInput::make('quick_sort')
+                            ->label('Urutan Quick POS')
+                            ->numeric()
+                            ->minValue(0)
+                            ->default(0),
                         TextInput::make('location')
                             ->label('Lokasi Barang')
                             ->placeholder('cth: Laci biru no.3 / Rak A baris 2 / Kotak dekat pintu')
-                            ->maxLength(255)
-                            ->columnSpanFull(),
+                            ->maxLength(255),
                         TagsInput::make('compatible_models')
                             ->label('Kompatibel dengan Motor')
                             ->placeholder('Ketik nama motor lalu Enter...')
-                            ->splitKeys(['Tab', ','])
-                            ->columnSpanFull(),
+                            ->splitKeys(['Tab', ',']),
                         Textarea::make('description')
                             ->label('Catatan')
-                            ->rows(3)
-                            ->columnSpanFull(),
-                    ]),
+                            ->rows(3),
+                    ])
+                    ->columns(2),
             ]);
     }
 }

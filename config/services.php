@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'autogopay' => [
+        'api_key' => env('AUTOGOPAY_API_KEY', ''),
+    ],
+
 ];

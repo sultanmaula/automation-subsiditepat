@@ -5,6 +5,7 @@ namespace App\Filament\Workshop\Resources\Sales\Pages;
 use App\Filament\Workshop\Resources\Sales\SaleResource;
 use App\Models\Workshop\Category;
 use App\Models\Workshop\Product;
+use App\Services\AutoGoPayService;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\CreateRecord;
 use Illuminate\Contracts\View\View;
@@ -92,30 +93,59 @@ class CreateSale extends CreateRecord
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {
-        // Parse paid - nilai sudah di-dehydrate oleh form jadi integer
-        $paid = (float) ($data['paid'] ?? 0);
+        $isQris = ($data['payment_method'] ?? 'cash') === 'qris';
 
-        // Set nilai awal, total akan dihitung di afterCreate
-        $data['paid'] = $paid;
-        $data['total'] = 0;
-        $data['change'] = 0;
-        $data['status'] = 'paid';
+        $data['paid']           = $isQris ? 0 : (float) ($data['paid'] ?? 0);
+        $data['total']          = 0;
+        $data['change']         = 0;
+        $data['status']         = $isQris ? 'pending' : 'paid';
+        $data['payment_status'] = $isQris ? 'pending' : 'paid';
 
         return $data;
     }
 
     protected function afterCreate(): void
     {
-        // Hitung total dari items yang sudah tersimpan
         $record = $this->record;
-        $total = (float) $record->items()->sum(\Illuminate\Support\Facades\DB::raw('quantity * unit_price'));
+        $total  = (float) $record->items()->sum(\Illuminate\Support\Facades\DB::raw('quantity * unit_price'));
+        $isQris = $record->payment_method === 'qris';
 
-        $paid = (float) $record->paid;
-        $change = max($paid - $total, 0);
+        $paid   = $isQris ? $total : (float) $record->paid;
+        $change = $isQris ? 0 : max($paid - $total, 0);
 
         $record->update([
-            'total' => $total,
+            'total'  => $total,
+            'paid'   => $paid,
             'change' => $change,
         ]);
+
+        if ($isQris) {
+            $qrisData = app(AutoGoPayService::class)->generateQris((int) $total);
+
+            if ($qrisData) {
+                $record->update([
+                    'qris_transaction_id' => $qrisData['transaction_id'] ?? null,
+                    'qris_qr_url'         => $qrisData['qr_url'] ?? null,
+                    'qris_checkout_url'   => $qrisData['checkout_url'] ?? null,
+                    'qris_expires_at'     => now()->addMinutes(15),
+                ]);
+            } else {
+                Notification::make()
+                    ->title('Gagal membuat QRIS')
+                    ->body('Cek koneksi atau API key AutoGoPay.')
+                    ->danger()
+                    ->send();
+            }
+        }
+
+        // QRIS: buka nota tanpa auto-print (tunggu pembayaran)
+        // Cash: buka nota dengan auto-print langsung
+        $notaUrl = route('workshop.nota', $record->id) . ($isQris ? '' : '?auto=1');
+        $this->js("window.open('{$notaUrl}', '_blank')");
+    }
+
+    protected function getRedirectUrl(): string
+    {
+        return static::getResource()::getUrl('index');
     }
 }

@@ -19,9 +19,18 @@ class CategoryResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-tag';
 
-    // protected static string|BackedEnum|null $navigationGroup = 'Inventory';
-
     protected static ?string $recordTitleAttribute = 'name';
+
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->hasPermission('categories') ?? false;
+    }
+
+    public static function getModelLabel(): string { return 'Kategori'; }
+
+    public static function getPluralModelLabel(): string { return 'Kategori'; }
+
+    public static function getNavigationLabel(): string { return 'Kategori'; }
 
     public static function form(Schema $schema): Schema
     {

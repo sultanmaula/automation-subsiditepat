@@ -20,12 +20,18 @@ class Sale extends Model
         'paid',
         'change',
         'status',
+        'payment_status',
+        'qris_transaction_id',
+        'qris_qr_url',
+        'qris_checkout_url',
+        'qris_expires_at',
     ];
 
     protected $casts = [
         'total' => 'decimal:2',
         'paid' => 'decimal:2',
         'change' => 'decimal:2',
+        'qris_expires_at' => 'datetime',
     ];
 
     protected static function booted(): void
@@ -38,6 +44,11 @@ class Sale extends Model
             if (empty($sale->cashier_id) && auth()->check()) {
                 $sale->cashier_id = auth()->id();
             }
+        });
+
+        static::retrieved(function (Sale $sale): void {
+            // Auto-check dan update status expired saat record di-retrieve
+            $sale->checkAndUpdateQrisExpired();
         });
     }
 
@@ -66,5 +77,23 @@ class Sale extends Model
             'total' => $total,
             'change' => $change,
         ])->save();
+    }
+
+    public function isQrisExpired(): bool
+    {
+        return $this->payment_method === 'qris'
+            && $this->payment_status === 'pending'
+            && $this->qris_expires_at
+            && now()->isAfter($this->qris_expires_at);
+    }
+
+    public function checkAndUpdateQrisExpired(): void
+    {
+        if ($this->isQrisExpired()) {
+            $this->update([
+                'payment_status' => 'expired',
+                'status' => 'expired',
+            ]);
+        }
     }
 }

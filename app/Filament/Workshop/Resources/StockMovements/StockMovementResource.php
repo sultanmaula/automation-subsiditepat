@@ -19,9 +19,18 @@ class StockMovementResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-arrow-path';
 
-    // protected static string|BackedEnum|null $navigationGroup = 'Inventory';
-
     protected static ?string $recordTitleAttribute = 'id';
+
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->hasPermission('stock') ?? false;
+    }
+
+    public static function getModelLabel(): string { return 'Pergerakan Stok'; }
+
+    public static function getPluralModelLabel(): string { return 'Riwayat Stok'; }
+
+    public static function getNavigationLabel(): string { return 'Riwayat Stok'; }
 
     public static function form(Schema $schema): Schema
     {

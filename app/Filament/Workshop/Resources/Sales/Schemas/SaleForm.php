@@ -86,17 +86,17 @@ class SaleForm
                             ->label('Metode Bayar')
                             ->options([
                                 'cash' => 'Tunai',
-                                'transfer' => 'Transfer',
-                                'debit' => 'Debit',
-                                'ewallet' => 'E-Wallet',
+                                'qris' => 'QRIS',
                             ])
                             ->default('cash')
+                            ->live()
                             ->required(),
                         TextInput::make('paid')
                             ->label('Bayar')
                             ->prefix('Rp')
                             ->minValue(0)
                             ->live(onBlur: true)
+                            ->hidden(fn (Get $get): bool => $get('payment_method') === 'qris')
                             ->extraInputAttributes([
                                 'x-on:input' => "
                                     let val = \$event.target.value.replace(/[^0-9]/g, '');
@@ -115,7 +115,8 @@ class SaleForm
                             ->content(fn (Get $get): \Illuminate\Support\HtmlString => new \Illuminate\Support\HtmlString(
                                 '<span style="font-size: 1.5rem; font-weight: bold; color: #dc2626;">' . self::formatCurrency(self::calculateChange($get)) . '</span>'
                             ))
-                            ->live(),
+                            ->live()
+                            ->hidden(fn (Get $get): bool => $get('payment_method') === 'qris'),
                     ]),
                 Section::make('Item')
                     ->schema([

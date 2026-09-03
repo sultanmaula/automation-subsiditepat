@@ -23,6 +23,15 @@ class ProductResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'name';
 
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->hasPermission('products') ?? false;
+    }
+
+    public static function getModelLabel(): string { return 'Produk'; }
+    public static function getPluralModelLabel(): string { return 'Produk'; }
+    public static function getNavigationLabel(): string { return 'Produk'; }
+
     public static function form(Schema $schema): Schema
     {
         return ProductForm::configure($schema);

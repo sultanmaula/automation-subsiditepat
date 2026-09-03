@@ -24,6 +24,7 @@ class User extends Authenticatable implements FilamentUser
         'email',
         'password',
         'role',
+        'permissions',
     ];
 
     /**
@@ -46,7 +47,20 @@ class User extends Authenticatable implements FilamentUser
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'permissions' => 'array',
         ];
+    }
+
+    public function hasPermission(string $permission): bool
+    {
+        if ($this->role === 'admin') {
+            return true;
+        }
+        // Kosong = pemilik/owner, akses penuh
+        if (empty($this->permissions)) {
+            return true;
+        }
+        return in_array($permission, $this->permissions);
     }
 
     public function canAccessPanel(Panel $panel): bool

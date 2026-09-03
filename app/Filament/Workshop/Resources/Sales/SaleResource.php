@@ -20,9 +20,18 @@ class SaleResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-shopping-cart';
 
-    // protected static string|BackedEnum|null $navigationGroup = 'POS';
-
     protected static ?string $recordTitleAttribute = 'sale_number';
+
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->hasPermission('sales') ?? false;
+    }
+
+    public static function getModelLabel(): string { return 'Transaksi'; }
+
+    public static function getPluralModelLabel(): string { return 'Transaksi'; }
+
+    public static function getNavigationLabel(): string { return 'Transaksi'; }
 
     public static function form(Schema $schema): Schema
     {
