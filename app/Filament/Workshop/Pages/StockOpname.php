@@ -25,7 +25,9 @@ class StockOpname extends Page
 
     protected static ?string $title = 'Stock Opname';
 
-    protected static ?int $navigationSort = 4;
+    protected static string | \UnitEnum | null $navigationGroup = 'Inventori';
+
+    protected static ?int $navigationSort = 3;
 
     public ?int $productId = null;
 

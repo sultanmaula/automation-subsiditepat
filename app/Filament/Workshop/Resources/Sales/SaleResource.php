@@ -20,6 +20,10 @@ class SaleResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-shopping-cart';
 
+    protected static string | \UnitEnum | null $navigationGroup = 'Kasir';
+
+    protected static ?int $navigationSort = 1;
+
     protected static ?string $recordTitleAttribute = 'sale_number';
 
     public static function canAccess(): bool

@@ -7,6 +7,20 @@ use Illuminate\Support\Facades\Log;
 
 class AutoGoPayService
 {
+    /**
+     * Nama header yang mungkin dipakai AutoGoPay untuk mengirim signature.
+     * Yang didokumentasikan adalah x-signature, sisanya jaga-jaga agar
+     * probe verifikasi callback URL tidak tertolak hanya karena beda nama.
+     */
+    public const SIGNATURE_HEADERS = [
+        'X-Signature',
+        'X-Callback-Signature',
+        'X-Webhook-Signature',
+        'X-AutoGoPay-Signature',
+        'X-Signature-256',
+        'Signature',
+    ];
+
     private string $baseUrl = 'https://v1-gateway.autogopay.site';
     private string $apiKey;
 
@@ -60,19 +74,40 @@ class AutoGoPayService
         }
     }
 
-    public function verifyWebhookSignature(string $payload, string $signature): bool
+    /**
+     * Tanda tangani sebuah string dengan API key (HMAC-SHA256, hex lowercase).
+     * Dipakai untuk membalas verification.challenge saat mendaftarkan callback URL.
+     */
+    public function sign(string $data): string
     {
-        $expected = hash_hmac('sha256', $payload, $this->apiKey);
+        return hash_hmac('sha256', $data, $this->apiKey);
+    }
 
-        Log::info('AutoGoPay Signature Verification', [
-            'payload_length' => strlen($payload),
-            'api_key_set' => !empty($this->apiKey),
-            'api_key_length' => strlen($this->apiKey),
-            'expected_signature' => $expected,
-            'received_signature' => $signature,
-            'match' => hash_equals($expected, $signature),
-        ]);
+    /**
+     * Verifikasi HMAC-SHA256 dari payload mentah memakai API key sebagai secret.
+     * Menerima format hex (default) maupun base64, dengan atau tanpa prefix "sha256=".
+     */
+    public function verifyWebhookSignature(string $payload, ?string $signature): bool
+    {
+        if ($this->apiKey === '' || $signature === null || trim($signature) === '') {
+            return false;
+        }
 
-        return hash_equals($expected, $signature);
+        $signature = trim($signature);
+
+        if (str_contains($signature, '=') && preg_match('/^sha-?256=/i', $signature)) {
+            $signature = preg_replace('/^sha-?256=/i', '', $signature);
+        }
+
+        $raw = hash_hmac('sha256', $payload, $this->apiKey, true);
+
+        foreach ([bin2hex($raw), base64_encode($raw)] as $expected) {
+            if (hash_equals($expected, $signature)) {
+                return true;
+            }
+        }
+
+        // Perbandingan hex tidak case-sensitive.
+        return hash_equals(bin2hex($raw), strtolower($signature));
     }
 }

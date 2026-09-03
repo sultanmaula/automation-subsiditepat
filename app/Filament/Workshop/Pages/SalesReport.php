@@ -25,7 +25,9 @@ class SalesReport extends Page
 
     protected static ?string $title = 'Laporan Penjualan';
 
-    protected static ?int $navigationSort = 3;
+    protected static string | \UnitEnum | null $navigationGroup = 'Laporan';
+
+    protected static ?int $navigationSort = 1;
 
     #[Url(as: 'from')]
     public string $dateFrom = '';

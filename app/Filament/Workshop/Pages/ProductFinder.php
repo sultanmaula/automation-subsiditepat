@@ -19,7 +19,14 @@ class ProductFinder extends Page
 
     protected static ?string $title = 'Cari Barang';
 
-    protected static ?int $navigationSort = 2;
+    protected static string | \UnitEnum | null $navigationGroup = 'Kasir';
+
+    protected static ?int $navigationSort = 3;
+
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->hasPermission('finder') ?? false;
+    }
 
     #[Url(as: 'q')]
     public string $search = '';

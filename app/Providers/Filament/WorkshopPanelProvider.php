@@ -8,6 +8,7 @@ use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
 use App\Filament\Workshop\Pages\ProductFinder;
 use App\Filament\Workshop\Pages\WorkshopDashboard;
+use Filament\Navigation\NavigationItem;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
@@ -40,6 +41,21 @@ class WorkshopPanelProvider extends PanelProvider
             ->pages([
                 WorkshopDashboard::class,
                 ProductFinder::class,
+            ])
+            // Urutan grup di sidebar ditentukan di sini, bukan oleh abjad.
+            ->navigationGroups([
+                'Kasir',
+                'Inventori',
+                'Laporan',
+                'Pengaturan',
+            ])
+            ->navigationItems([
+                NavigationItem::make('Layar Pembayaran')
+                    ->url(fn (): string => route('workshop.display'), shouldOpenInNewTab: true)
+                    ->icon('heroicon-o-device-phone-mobile')
+                    ->group('Kasir')
+                    ->sort(2)
+                    ->visible(fn (): bool => auth()->user()?->hasPermission('display') ?? false),
             ])
             ->discoverWidgets(in: app_path('Filament/Workshop/Widgets'), for: 'App\\Filament\\Workshop\\Widgets')
             ->widgets([

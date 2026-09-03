@@ -7,8 +7,8 @@ use App\Filament\Workshop\Resources\Users\Pages\EditUser;
 use App\Filament\Workshop\Resources\Users\Pages\ListUsers;
 use App\Models\User;
 use BackedEnum;
-use Filament\Forms\Components\CheckboxList;
 use Filament\Schemas\Components\Section;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
@@ -25,7 +25,9 @@ class UserResource extends Resource
 
     protected static ?string $recordTitleAttribute = 'name';
 
-    protected static ?int $navigationSort = 10;
+    protected static string | \UnitEnum | null $navigationGroup = 'Pengaturan';
+
+    protected static ?int $navigationSort = 1;
 
     public static function canAccess(): bool
     {
@@ -71,21 +73,25 @@ class UserResource extends Resource
                         ->maxLength(255),
                 ]),
 
-            Section::make('Akses Menu')
-                ->description('Centang menu yang boleh diakses oleh pengguna ini.')
+            Section::make('Role')
+                ->description('Akses menu ditentukan oleh role. Ubah daftar izinnya di menu Role.')
                 ->schema([
-                    CheckboxList::make('permissions')
-                        ->label('')
-                        ->options([
-                            'sales'      => 'POS / Transaksi',
-                            'products'   => 'Produk',
-                            'categories' => 'Kategori',
-                            'stock'      => 'Stock Opname & Riwayat Stok',
-                            'reports'    => 'Laporan Penjualan',
-                            'users'      => 'Manajemen Pengguna',
-                        ])
-                        ->columns(2)
-                        ->gridDirection('row'),
+                    Select::make('role_id')
+                        ->label('Role')
+                        ->relationship(
+                            name: 'accessRole',
+                            titleAttribute: 'name',
+                            modifyQueryUsing: fn ($query) => $query->where('panel', 'workshop'),
+                        )
+                        ->required()
+                        ->preload()
+                        ->searchable()
+                        ->helperText(fn ($state): string => filled($state)
+                            ? 'Izin: ' . collect(\App\Models\Role::find($state)?->permissions ?? [])
+                                ->map(fn (string $p): string => \App\Models\Role::WORKSHOP_PERMISSIONS[$p] ?? $p)
+                                ->join(', ')
+                            : 'Pilih role untuk melihat daftar izinnya.')
+                        ->live(),
                 ]),
         ]);
     }
@@ -102,6 +108,10 @@ class UserResource extends Resource
                 TextColumn::make('email')
                     ->label('Email')
                     ->searchable(),
+                TextColumn::make('accessRole.name')
+                    ->label('Role')
+                    ->badge()
+                    ->placeholder('—'),
                 TextColumn::make('created_at')
                     ->label('Ditambahkan')
                     ->dateTime('d/m/Y H:i')

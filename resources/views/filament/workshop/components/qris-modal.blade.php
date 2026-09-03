@@ -1,7 +1,13 @@
 @php
-    $expiryTs  = $sale->created_at->timestamp + 900; // +15 menit
+    // Selalu ikut kolom qris_expires_at supaya QR hasil "Bayar Ulang" tidak
+    // langsung tampil expired (dulu dihitung dari created_at + 900).
+    $expiryTs  = ($sale->qris_expires_at ?? $sale->created_at->addMinutes(15))->timestamp;
     $pollUrl   = route('workshop.sale.payment-status', $sale->id);
     $isPending = $sale->payment_status !== 'settlement';
+
+    // Dihitung di server supaya QR yang sudah mati tidak sempat berkedip
+    // sedetik sebelum timer sisi klien menyusul.
+    $isExpired = $sale->payment_status === 'expired' || $expiryTs <= now()->timestamp;
 @endphp
 
 <div
@@ -11,8 +17,9 @@
         isPending: {{ $isPending ? 'true' : 'false' }},
         expiryDisplay: '',
         countdown: '',
-        expired: false,
-        paid: false,
+        expired: {{ $isExpired && $isPending ? 'true' : 'false' }},
+        paid: {{ $isPending ? 'false' : 'true' }},
+        qrBroken: false,
         pad(n) { return String(n).padStart(2, '0'); },
         init() {
             const exp = new Date(this.expiryTs * 1000);
@@ -59,21 +66,37 @@
     </div>
     @endif
 
-    {{-- QR Image --}}
-    @if($sale->qris_qr_url)
-    <div style="position:relative;display:inline-block;">
+    {{-- QR Image.
+         qris_qr_url menunjuk ke server AutoGoPay, bukan storage kita, dan mati
+         setelah beberapa jam. Karena itu gambarnya dilepas dari DOM begitu
+         tidak relevan lagi — jangan sekadar ditutupi lapisan LUNAS, nanti yang
+         tersisa cuma ikon gambar rusak. --}}
+    @if($sale->qris_qr_url && $isPending)
+    <template x-if="!paid && !expired && !qrBroken">
         <img
             src="{{ $sale->qris_qr_url }}"
             alt="QRIS {{ $sale->sale_number }}"
-            :style="expired || paid ? 'opacity:0.3;filter:blur(3px) grayscale(1);' : ''"
+            x-on:error="qrBroken = true"
             style="width:220px;height:220px;border-radius:8px;border:1px solid #e5e7eb;display:block;"
         >
-        <div x-show="paid" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-            <span style="background:#16a34a;color:#fff;font-size:16px;font-weight:bold;padding:8px 18px;border-radius:8px;letter-spacing:2px;transform:rotate(-15deg);display:inline-block;box-shadow:0 2px 8px rgba(0,0,0,.2);">LUNAS</span>
+    </template>
+
+    <template x-if="paid || expired || qrBroken">
+        <div
+            :style="'width:220px;height:220px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:12px;background:' + (paid ? '#16a34a' : (expired ? '#dc2626' : '#b45309'))"
+        >
+            <span style="font-size:44px;line-height:1;color:#fff" x-text="paid ? '✓' : (expired ? '✕' : '⚠')"></span>
+            <span style="font-size:16px;font-weight:800;letter-spacing:2px;color:#fff"
+                  x-text="paid ? 'LUNAS' : (expired ? 'EXPIRED' : 'QR GAGAL DIMUAT')"></span>
+            <span x-show="qrBroken && !paid && !expired"
+                  style="font-size:11px;color:rgba(255,255,255,.92);letter-spacing:0">Buat ulang QRIS</span>
         </div>
-        <div x-show="expired && !paid" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
-            <span style="background:#dc2626;color:#fff;font-size:13px;font-weight:bold;padding:6px 14px;border-radius:8px;transform:rotate(-15deg);display:inline-block;">EXPIRED</span>
-        </div>
+    </template>
+    @elseif($sale->qris_qr_url)
+    {{-- Sudah lunas sejak halaman dimuat: tidak ada alasan memuat QR sama sekali. --}}
+    <div style="width:220px;height:220px;border-radius:8px;background:#16a34a;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;">
+        <span style="font-size:44px;line-height:1;color:#fff">✓</span>
+        <span style="font-size:16px;font-weight:800;letter-spacing:2px;color:#fff">LUNAS</span>
     </div>
     @else
     <div style="font-size:12px;color:#999;">QR code tidak tersedia</div>

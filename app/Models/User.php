@@ -6,6 +6,7 @@ use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -24,6 +25,7 @@ class User extends Authenticatable implements FilamentUser
         'email',
         'password',
         'role',
+        'role_id',
         'permissions',
     ];
 
@@ -51,16 +53,33 @@ class User extends Authenticatable implements FilamentUser
         ];
     }
 
+    /**
+     * Role izin di dalam panel. Sengaja TIDAK dinamai role() karena kolom
+     * users.role sudah dipakai sebagai penentu panel (workshop / lpg).
+     */
+    public function accessRole(): BelongsTo
+    {
+        return $this->belongsTo(Role::class, 'role_id');
+    }
+
     public function hasPermission(string $permission): bool
     {
         if ($this->role === 'admin') {
             return true;
         }
-        // Kosong = pemilik/owner, akses penuh
+
+        // Role adalah sumber kebenaran begitu dipasang.
+        if ($this->role_id) {
+            return $this->accessRole?->hasPermission($permission) ?? false;
+        }
+
+        // Belum punya role: kolom permissions lama tetap dihormati, dan daftar
+        // kosong berarti pemilik dengan akses penuh (perilaku sejak awal).
         if (empty($this->permissions)) {
             return true;
         }
-        return in_array($permission, $this->permissions);
+
+        return in_array($permission, $this->permissions, true);
     }
 
     public function canAccessPanel(Panel $panel): bool

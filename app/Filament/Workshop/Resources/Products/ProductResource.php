@@ -19,7 +19,10 @@ class ProductResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-archive-box';
 
-    // protected static string|BackedEnum|null $navigationGroup = 'Inventory';
+    protected static string | \UnitEnum | null $navigationGroup = 'Inventori';
+
+    protected static ?int $navigationSort = 1;
+
 
     protected static ?string $recordTitleAttribute = 'name';
 

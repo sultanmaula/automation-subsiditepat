@@ -43,6 +43,20 @@
             margin-top: 2px;
         }
 
+        .shop-addr {
+            font-size: 9px;
+            color: #555;
+            margin-top: 4px;
+            line-height: 1.45;
+        }
+
+        .shop-hours {
+            font-size: 9px;
+            font-weight: bold;
+            color: #000;
+            margin-top: 3px;
+        }
+
         .receipt-meta {
             font-size: 10px;
             margin-bottom: 0.75rem;
@@ -98,25 +112,60 @@
             padding-top: 4px;
         }
 
-        /* QRIS section */
-        .qris-section {
+        /* Cap status pembayaran */
+        .stamp {
             text-align: center;
-            margin: 0.75rem 0;
-            padding: 0.75rem;
-            border: 1px dashed #9333ea;
-            border-radius: 6px;
-        }
-
-        .qris-label {
-            font-size: 11px;
+            margin: 0.75rem 0 0.25rem;
+            padding: 0.4rem;
+            font-size: 13px;
             font-weight: bold;
-            color: #9333ea;
-            margin-bottom: 0.5rem;
-            letter-spacing: 1px;
+            letter-spacing: 2px;
+            border: 2px solid #000;
+            border-radius: 4px;
+        }
+        .stamp.unpaid { border-style: dashed; }
+
+        .qris-ref {
+            text-align: center;
+            font-size: 9px;
+            color: #555;
+            word-break: break-all;
         }
 
-        .qris-img { width: 180px; height: 180px; }
+        /* Panel tunggu — tidak ikut tercetak */
+        .waiting {
+            text-align: center;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            border-radius: 0.5rem;
+            font-size: 0.8rem;
+            color: #92400e;
+            line-height: 1.6;
+        }
+        .waiting strong { display: block; font-size: 0.95rem; margin-bottom: 0.25rem; }
 
+
+        /* Blok ajakan ulasan Google Maps */
+        .review {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 0.75rem;
+            padding-top: 0.6rem;
+            border-top: 1px dashed #999;
+        }
+
+        .review-qr { flex: 0 0 auto; line-height: 0; }
+        /* 88px ~= 23mm saat dicetak. QR versi 5 (37 modul) jatuh di ~0,62mm
+           per modul — batas bawah yang masih aman dibaca kamera HP dari
+           kertas thermal. Jangan dikecilkan lagi. */
+        .review-qr svg { display: block; width: 88px; height: 88px; }
+
+        .review-text { font-size: 9px; line-height: 1.5; }
+        .review-stars { font-size: 12px; letter-spacing: 2px; }
+        .review-lead { font-weight: bold; font-size: 10px; }
 
         .receipt-footer {
             margin-top: 0.75rem;
@@ -163,12 +212,25 @@
         <button class="btn-print" onclick="window.print()">🖨️ Cetak</button>
     </div>
 
+    @if($sale->payment_method === 'qris' && $sale->payment_status !== 'settlement')
+    <div class="no-print waiting">
+        <strong id="wait-title">⏳ Menunggu pembayaran…</strong>
+        <span id="wait-note">Nota akan tercetak sendiri begitu pembayaran masuk.</span>
+    </div>
+    @endif
+
     <div class="receipt">
 
         {{-- Header --}}
         <div class="receipt-header">
             <div class="shop-name">JAMUS MOTOR</div>
             <div class="shop-sub">Bengkel & Toko Sparepart</div>
+            <div class="shop-addr">
+                Jl. Raya Menganto, RT.10/RW.03, Menganto<br>
+                Kec. Mojowarno, Kabupaten Jombang<br>
+                Jawa Timur 61475
+            </div>
+            <div class="shop-hours">Buka 07.00 - 16.00 WIB</div>
         </div>
 
         {{-- Meta --}}
@@ -228,23 +290,35 @@
             @endif
         </div>
 
-        {{-- QRIS Section --}}
-        @if($sale->payment_method === 'qris')
-        <div class="qris-section" id="qris-section">
-            <div class="qris-label" id="qris-label">
-                @if($sale->payment_status === 'settlement') ✓ LUNAS @else ⚡ SCAN UNTUK BAYAR @endif
+        {{-- Cap status pembayaran, berlaku untuk semua metode. Khusus QRIS, QR
+             sengaja tidak ikut dicetak: nota adalah bukti transaksi selesai,
+             sedangkan QR ditampilkan di layar HP pegawai. --}}
+        @php
+            $isPaid  = in_array($sale->payment_status, ['paid', 'settlement'], true);
+            $metode  = $sale->payment_method === 'qris' ? 'QRIS' : 'TUNAI';
+        @endphp
+
+        @if($isPaid)
+        <div class="stamp paid">✓ LUNAS — {{ $metode }}</div>
+        @else
+        <div class="stamp unpaid">BELUM LUNAS</div>
+        @endif
+
+        @if($sale->payment_method === 'qris' && $sale->qris_transaction_id)
+        <div class="qris-ref">Ref: {{ $sale->qris_transaction_id }}</div>
+        @endif
+
+        {{-- Ajakan ulasan. QR dirender sebagai SVG di server, bukan menumpang
+             layanan gambar pihak ketiga, supaya nota lama tetap utuh. --}}
+        @if(filled(config('shop.maps_review_url')))
+        <div class="review">
+            <div class="review-qr">{!! App\Support\QrCode::svg(config('shop.maps_review_url'), 88) !!}</div>
+            <div class="review-text">
+                <div class="review-stars">★★★★★</div>
+                <div class="review-lead">Puas dengan layanan kami?</div>
+                <div>Scan untuk beri bintang 5 di Google Maps.</div>
+                <div>Ulasan Anda sangat membantu kami.</div>
             </div>
-            @if($sale->qris_qr_url)
-            <div style="position:relative;display:inline-block;">
-                <img class="qris-img" id="qris-img" src="{{ $sale->qris_qr_url }}" alt="QRIS"
-                    @if($sale->payment_status === 'settlement') style="filter:blur(4px) grayscale(1);opacity:0.4;" @endif>
-                <div id="qris-lunas-overlay" style="position:absolute;inset:0;display:{{ $sale->payment_status === 'settlement' ? 'flex' : 'none' }};align-items:center;justify-content:center;">
-                    <span style="background:#16a34a;color:#fff;font-size:14px;font-weight:bold;padding:6px 14px;border-radius:6px;letter-spacing:1px;transform:rotate(-15deg);display:inline-block;">LUNAS</span>
-                </div>
-            </div>
-            @else
-            <div style="font-size:10px;color:#999">QR code tidak tersedia</div>
-            @endif
         </div>
         @endif
 
@@ -258,12 +332,46 @@
 </div>
 
 <script>
-@if($sale->payment_method !== 'qris')
-    // Auto print untuk metode non-QRIS
+    // Cetak otomatis berlaku untuk semua metode. Untuk QRIS, tab ini menunggu
+    // dulu lalu memuat ulang dirinya dengan ?auto=1 setelah lunas, supaya yang
+    // keluar dari printer sudah bercap LUNAS.
     if (new URLSearchParams(window.location.search).get('auto') === '1') {
         window.onload = () => setTimeout(() => window.print(), 400);
         window.onafterprint = () => window.close();
     }
+
+@if($sale->payment_method === 'qris' && $sale->payment_status !== 'settlement')
+    (function () {
+        const url   = @json(route('workshop.sale.payment-status', $sale->id));
+        const done  = @json(route('workshop.nota', $sale->id) . '?auto=1');
+        const title = document.getElementById('wait-title');
+        const note  = document.getElementById('wait-note');
+        let attempts = 0;
+
+        const timer = setInterval(async () => {
+            if (++attempts > 320) {
+                clearInterval(timer);
+                title.textContent = '⌛ Berhenti memantau';
+                note.textContent  = 'Muat ulang halaman ini untuk memeriksa lagi.';
+                return;
+            }
+            try {
+                const res  = await fetch(url);
+                const data = await res.json();
+
+                if (data.payment_status === 'settlement') {
+                    clearInterval(timer);
+                    title.textContent = '✓ Pembayaran diterima — mencetak…';
+                    note.textContent  = '';
+                    location.replace(done);
+                } else if (data.payment_status === 'expired') {
+                    clearInterval(timer);
+                    title.textContent = '✕ QRIS kedaluwarsa';
+                    note.textContent  = 'Gunakan tombol "Bayar Ulang" di daftar transaksi.';
+                }
+            } catch (e) {}
+        }, 3000);
+    })();
 @endif
 </script>
 </body>
