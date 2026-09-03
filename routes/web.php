@@ -42,6 +42,6 @@ Route::middleware('auth')->get('/workshop/sale/{id}/payment-status', function ($
     return response()->json(['payment_status' => $sale->payment_status]);
 })->name('workshop.sale.payment-status');
 
-Route::post('/webhook/autogopay', \App\Http\Controllers\AutoGoPayWebhookController::class)
+Route::match(['get', 'post'], '/webhook/autogopay', \App\Http\Controllers\AutoGoPayWebhookController::class)
     ->name('webhook.autogopay')
     ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\VerifyCsrfToken::class]);
