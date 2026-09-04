@@ -51,3 +51,15 @@ Schedule::command('db:backup')
     ->timezone('Asia/Jakarta')
     ->name('db:backup')
     ->withoutOverlapping();
+
+
+// ---------------------------------------------------------------------------
+// Panel Bengkel
+// ---------------------------------------------------------------------------
+
+// Jaring pengaman kalau webhook AutoGoPay tidak sampai. Jalur utamanya tetap
+// webhook; ini hanya menanyakan ulang transaksi QRIS yang masih menggantung.
+Schedule::command('workshop:reconcile-qris')
+    ->everyMinute()
+    ->name('workshop:reconcile-qris')
+    ->withoutOverlapping();

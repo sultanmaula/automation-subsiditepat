@@ -32,6 +32,7 @@
         .amount { font-size:1.35rem; font-weight:700; letter-spacing:-.01em; }
         .sale-no { font-size:.7rem; color:#9ca3af; font-family:ui-monospace, monospace; }
         .cust { font-size:.8rem; color:#d1d5db; margin-top:.15rem; }
+        .items-sum { font-size:.75rem; color:#9ca3af; margin-top:.2rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .badge {
             font-size:.65rem; font-weight:700; padding:.2rem .5rem; border-radius:999px;
             text-transform:uppercase; letter-spacing:.05em; white-space:nowrap;
@@ -45,7 +46,9 @@
         /* ---- layar QR ---- */
         .sheet { position:fixed; inset:0; background:#111827; display:flex; flex-direction:column; padding:1rem; z-index:10; }
         .back { background:none; border:none; color:#9ca3af; font:inherit; font-size:.9rem; padding:.5rem 0; text-align:left; cursor:pointer; }
-        .sheet-body { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.9rem; }
+        .sheet-body { flex:1; display:flex; flex-direction:column; align-items:center; gap:.9rem; overflow-y:auto; }
+        .sheet-inner { margin:auto 0; display:flex; flex-direction:column; align-items:center; gap:.9rem; width:100%; }
+        .sheet-inner > * { flex-shrink:0; }
         .qr-wrap { position:relative; background:#fff; padding:.9rem; border-radius:1rem; line-height:0; }
         .qr-wrap img { width:min(72vw, 320px); height:min(72vw, 320px); display:block; }
         .qr-total { font-size:2rem; font-weight:800; letter-spacing:-.02em; }
@@ -70,6 +73,19 @@
         .panel .mark { font-size:3.75rem; line-height:1; color:#fff; }
         .panel .word { font-size:1.35rem; font-weight:800; letter-spacing:.08em; color:#fff; }
         .panel .sub  { font-size:.85rem; font-weight:500; letter-spacing:0; color:rgba(255,255,255,.92); }
+
+        /* ---- rincian pesanan ---- */
+        .order {
+            width:min(84vw, 360px);
+            background:#1f2937; border:1px solid #374151; border-radius:.75rem;
+            padding:.6rem .85rem;
+        }
+        .order-title { font-size:.68rem; text-transform:uppercase; letter-spacing:.06em; color:#9ca3af; margin-bottom:.35rem; }
+        .order-row { display:flex; align-items:baseline; gap:.6rem; padding:.28rem 0; font-size:.85rem; }
+        .order-row + .order-row { border-top:1px solid #374151; }
+        .order-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .order-qty { color:#9ca3af; font-size:.75rem; white-space:nowrap; font-variant-numeric:tabular-nums; }
+        .order-sub { font-weight:600; white-space:nowrap; font-variant-numeric:tabular-nums; }
 
         .hint { font-size:.75rem; color:#6b7280; text-align:center; padding-bottom:.5rem; }
     </style>
@@ -102,6 +118,7 @@
                           x-text="s.payment_status === 'settlement' ? 'Lunas' : 'Menunggu'"></span>
                 </div>
                 <div class="cust" x-show="s.customer_name" x-text="s.customer_name"></div>
+                <div class="items-sum" x-show="s.items?.length" x-text="ringkasItem(s.items)"></div>
                 <div class="sale-no" x-text="s.sale_number"></div>
             </button>
         </template>
@@ -112,7 +129,21 @@
         <button class="back" @click="close()">‹ Kembali</button>
 
         <div class="sheet-body" x-show="active">
+          <div class="sheet-inner">
             <div class="qr-total" x-text="active ? rupiah(active.total) : ''"></div>
+
+            {{-- Rincian pesanan: layar ini yang dilihat customer saat memindai,
+                 jadi isi keranjang ikut ditampilkan sebelum QR. --}}
+            <div class="order" x-show="active?.items?.length">
+                <div class="order-title">Rincian pesanan</div>
+                <template x-for="it in (active?.items || [])" :key="it.id">
+                    <div class="order-row">
+                        <span class="order-name" x-text="it.name"></span>
+                        <span class="order-qty" x-text="it.quantity + ' × ' + rupiah(it.unit_price)"></span>
+                        <span class="order-sub" x-text="rupiah(it.subtotal)"></span>
+                    </div>
+                </template>
+            </div>
 
             <template x-if="showQr">
                 <div class="qr-wrap">
@@ -132,7 +163,10 @@
 
             <div class="status">
                 <template x-if="paid">
-                    <span style="color:#4ade80">Pembayaran diterima</span>
+                    <span style="color:#4ade80">
+                        Pembayaran diterima
+                        <template x-if="active?.qris_issuer"><span> · <span x-text="active.qris_issuer"></span></span></template>
+                    </span>
                 </template>
                 <template x-if="!paid && !expired">
                     <span style="display:flex;align-items:center;gap:.5rem;color:#fbbf24">
@@ -145,6 +179,7 @@
             </div>
 
             <div class="qr-sub" x-text="active?.sale_number"></div>
+          </div>
         </div>
 
         <div class="hint" x-show="!paid && !expired">Arahkan layar ke customer untuk dipindai</div>
@@ -167,6 +202,12 @@
             get panelWord() { return this.paid ? 'LUNAS' : (this.expired ? 'EXPIRED' : 'QR GAGAL DIMUAT'); },
 
             rupiah(n) { return 'Rp ' + Number(n).toLocaleString('id-ID'); },
+
+            // Ringkasan satu baris untuk kartu daftar; nama panjang dipotong CSS.
+            ringkasItem(items) {
+                if (!items || !items.length) return '';
+                return items.map(i => i.name + (i.quantity > 1 ? ' ×' + i.quantity : '')).join(', ');
+            },
 
             start() {
                 this.fetchSales();

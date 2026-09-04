@@ -51,11 +51,11 @@ class SalesReport extends Page
         $from = $this->dateFrom . ' 00:00:00';
         $to   = $this->dateTo   . ' 23:59:59';
 
-        $transactions = Sale::whereBetween('created_at', [$from, $to])->count();
-        $revenue      = Sale::whereBetween('created_at', [$from, $to])->sum('total');
+        $transactions = Sale::counted()->whereBetween('created_at', [$from, $to])->count();
+        $revenue      = Sale::counted()->whereBetween('created_at', [$from, $to])->sum('total');
 
         $profit = SaleItem::query()
-            ->whereHas('sale', fn ($q) => $q->whereBetween('created_at', [$from, $to]))
+            ->whereHas('sale', fn ($q) => $q->counted()->whereBetween('created_at', [$from, $to]))
             ->join('workshop_products', 'workshop_sale_items.product_id', '=', 'workshop_products.id')
             ->selectRaw('SUM((workshop_sale_items.unit_price - workshop_products.cost_price) * workshop_sale_items.quantity) as profit')
             ->value('profit') ?? 0;
@@ -71,6 +71,7 @@ class SalesReport extends Page
     public function dailySales(): Collection
     {
         return Sale::query()
+            ->counted()
             ->whereBetween('created_at', [
                 $this->dateFrom . ' 00:00:00',
                 $this->dateTo   . ' 23:59:59',
@@ -85,7 +86,7 @@ class SalesReport extends Page
     public function topProducts(): Collection
     {
         return SaleItem::query()
-            ->whereHas('sale', fn ($q) => $q->whereBetween('created_at', [
+            ->whereHas('sale', fn ($q) => $q->counted()->whereBetween('created_at', [
                 $this->dateFrom . ' 00:00:00',
                 $this->dateTo   . ' 23:59:59',
             ]))

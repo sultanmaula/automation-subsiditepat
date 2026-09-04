@@ -21,6 +21,12 @@ class AutoGoPayService
         'Signature',
     ];
 
+    /**
+     * Status transaksi yang dianggap lunas. Dipakai webhook maupun
+     * rekonsiliasi, jadi tinggal di sini supaya tidak ada dua daftar.
+     */
+    public const PAID_STATUSES = ['PAID', 'SETTLEMENT', 'SETTLED', 'SUCCESS', 'CAPTURE'];
+
     private string $baseUrl = 'https://v1-gateway.autogopay.site';
     private string $apiKey;
 
@@ -46,6 +52,40 @@ class AutoGoPayService
         } catch (\Throwable $e) {
             Log::error('AutoGoPay checkStatus exception', ['message' => $e->getMessage()]);
             return null;
+        }
+    }
+
+    /**
+     * Cari nama issuer (mis. "BCA", "Airpay Shopee") dari daftar transaksi
+     * terbaru AutoGoPay. Webhook & /qris/status tidak mengirim field ini —
+     * baru ada di /transactions, dicocokkan lewat id (= transaction_id kita).
+     */
+    public function findIssuer(string $transactionId): ?string
+    {
+        return $this->fetchTransactions()[$transactionId] ?? null;
+    }
+
+    /**
+     * @return array<string, string> peta transaction_id => issuer
+     */
+    public function fetchTransactions(): array
+    {
+        try {
+            $response = Http::withToken($this->apiKey)
+                ->timeout(10)
+                ->post("{$this->baseUrl}/transactions");
+
+            if (! $response->successful() || ! $response->json('success')) {
+                return [];
+            }
+
+            return collect($response->json('data.transactions', []))
+                ->filter(fn (array $trx) => isset($trx['id'], $trx['issuer']))
+                ->pluck('issuer', 'id')
+                ->all();
+        } catch (\Throwable $e) {
+            Log::error('AutoGoPay fetchTransactions exception', ['message' => $e->getMessage()]);
+            return [];
         }
     }
 

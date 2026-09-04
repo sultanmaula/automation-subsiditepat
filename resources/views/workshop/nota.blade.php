@@ -287,6 +287,11 @@
             <div class="row">
                 <span>Metode</span><span>QRIS</span>
             </div>
+            @if($sale->qris_issuer)
+            <div class="row">
+                <span>Provider</span><span>{{ $sale->qris_issuer }}</span>
+            </div>
+            @endif
             @endif
         </div>
 

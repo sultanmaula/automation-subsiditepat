@@ -122,6 +122,12 @@
         @endif
     </div>
 
+    {{-- Provider QRIS: baru diketahui setelah lunas, jadi diambil langsung dari
+         $sale (halaman ini reload penuh begitu status berubah). --}}
+    @if(!$isPending && $sale->qris_issuer)
+    <div style="font-size:12px;color:#6b7280;">Dibayar via <strong>{{ $sale->qris_issuer }}</strong></div>
+    @endif
+
     {{-- Link --}}
     @if($sale->qris_checkout_url)
     <a href="{{ $sale->qris_checkout_url }}" target="_blank"

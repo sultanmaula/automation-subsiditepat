@@ -17,11 +17,11 @@ class WorkshopStatsWidget extends BaseWidget
         $from = now()->startOfDay();
         $to   = now()->endOfDay();
 
-        $todaySales   = Sale::whereBetween('created_at', [$from, $to])->count();
-        $todayRevenue = Sale::whereBetween('created_at', [$from, $to])->sum('total');
+        $todaySales   = Sale::counted()->whereBetween('created_at', [$from, $to])->count();
+        $todayRevenue = Sale::counted()->whereBetween('created_at', [$from, $to])->sum('total');
 
         $todayProfit = SaleItem::query()
-            ->whereHas('sale', fn ($q) => $q->whereBetween('created_at', [$from, $to]))
+            ->whereHas('sale', fn ($q) => $q->counted()->whereBetween('created_at', [$from, $to]))
             ->join('workshop_products', 'workshop_sale_items.product_id', '=', 'workshop_products.id')
             ->selectRaw('SUM((workshop_sale_items.unit_price - workshop_products.cost_price) * workshop_sale_items.quantity) as profit')
             ->value('profit') ?? 0;

@@ -9,9 +9,6 @@ use Illuminate\Support\Facades\Log;
 
 class AutoGoPayWebhookController extends Controller
 {
-    /** Status transaksi yang dianggap lunas. */
-    private const PAID_STATUSES = ['PAID', 'SETTLEMENT', 'SETTLED', 'SUCCESS', 'CAPTURE'];
-
 
     public function __invoke(Request $request, AutoGoPayService $service)
     {
@@ -70,7 +67,7 @@ class AutoGoPayWebhookController extends Controller
             return response()->json(['message' => 'ok']);
         }
 
-        if (! in_array($status, self::PAID_STATUSES, true)) {
+        if (! in_array($status, AutoGoPayService::PAID_STATUSES, true)) {
             $log->info('Webhook diabaikan, status belum lunas', [
                 'transaction_id' => $transactionId,
                 'status'         => $status,
@@ -82,12 +79,26 @@ class AutoGoPayWebhookController extends Controller
         // 'expired' ikut diselamatkan: kalau customer membayar tepat di batas 15
         // menit, penanda expired lokal bisa menang duluan dari callback. Vonis
         // AutoGoPay lebih sahih daripada timer kita sendiri.
-        $updated = Sale::where('qris_transaction_id', $transactionId)
+        $sales = Sale::where('qris_transaction_id', $transactionId)
             ->whereIn('payment_status', ['pending', 'expired'])
-            ->update([
+            ->get();
+
+        $issuer = $sales->isNotEmpty() ? $service->findIssuer($transactionId) : null;
+
+        foreach ($sales as $sale) {
+            $sale->forceFill([
                 'payment_status' => 'settlement',
                 'status'         => 'paid',
-            ]);
+                'qris_issuer'    => $issuer,
+            ])->save();
+
+            // Kalau penanda expired sempat menang duluan, stoknya sudah
+            // dikembalikan. Barangnya tetap berpindah ke customer, jadi
+            // tarik lagi supaya stok tidak kelebihan.
+            $sale->reclaimStock('Pembayaran terkonfirmasi webhook — ' . $sale->sale_number);
+        }
+
+        $updated = $sales->count();
 
         $log->info('Webhook processed', [
             'transaction_id' => $transactionId,

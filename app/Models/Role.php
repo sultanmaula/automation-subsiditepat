@@ -35,6 +35,7 @@ class Role extends Model
         'reports'    => 'Laporan Penjualan',
         'users'      => 'Manajemen Pengguna',
         'roles'      => 'Manajemen Role',
+        'void'       => 'Batalkan Transaksi',
     ];
 
     public function users(): HasMany

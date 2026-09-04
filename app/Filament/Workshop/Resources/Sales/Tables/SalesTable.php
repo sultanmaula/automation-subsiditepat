@@ -6,6 +6,7 @@ use App\Models\Workshop\Sale;
 use App\Services\AutoGoPayService;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
+use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
@@ -30,22 +31,31 @@ class SalesTable
                     ->sortable(),
                 TextColumn::make('payment_method')
                     ->label('Metode Bayar')
-                    ->badge(),
+                    ->badge()
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'qris' => 'QRIS',
+                        'cash' => 'Tunai',
+                        default => $state,
+                    })
+                    ->tooltip(fn (Sale $record): ?string => $record->qris_issuer),
                 TextColumn::make('status')
                     ->label('Status')
                     ->badge()
                     ->color(fn (string $state): string => match ($state) {
-                        'paid'    => 'success',
-                        'pending' => 'warning',
-                        'expired' => 'danger',
-                        default   => 'gray',
+                        'paid'      => 'success',
+                        'pending'   => 'warning',
+                        'expired'   => 'danger',
+                        'cancelled' => 'gray',
+                        default     => 'gray',
                     })
                     ->formatStateUsing(fn (string $state): string => match ($state) {
-                        'paid'    => 'Lunas',
-                        'pending' => 'Menunggu',
-                        'expired' => 'Expired',
-                        default   => $state,
-                    }),
+                        'paid'      => 'Lunas',
+                        'pending'   => 'Menunggu',
+                        'expired'   => 'Expired',
+                        'cancelled' => 'Dibatalkan',
+                        default     => $state,
+                    })
+                    ->tooltip(fn (Sale $record): ?string => $record->cancel_reason),
                 TextColumn::make('created_at')
                     ->label('Waktu')
                     ->dateTime()
@@ -105,6 +115,40 @@ class SalesTable
                             ->success()
                             ->send();
                     }),
+                Action::make('batalkan')
+                    ->label('Batalkan')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->visible(fn (Sale $record): bool =>
+                        $record->status !== 'cancelled' &&
+                        auth()->user()?->hasPermission('void')
+                    )
+                    ->schema([
+                        Textarea::make('reason')
+                            ->label('Alasan pembatalan')
+                            ->placeholder('Contoh: salah input barang, customer batal ambil.')
+                            ->required()
+                            ->maxLength(255)
+                            ->rows(2),
+                    ])
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Sale $record): string => 'Batalkan ' . $record->sale_number)
+                    ->modalDescription(fn (Sale $record): string => $record->status === 'paid'
+                        // Transaksi lunas: uangnya sudah masuk, dan sistem ini
+                        // tidak bisa menariknya kembali. Katakan terus terang.
+                        ? 'Transaksi ini sudah lunas. Stok akan dikembalikan dan nilainya keluar dari omzet, tapi pengembalian uang ke customer harus dilakukan manual.'
+                        : 'Stok akan dikembalikan dan transaksi ini tidak lagi dihitung sebagai penjualan.')
+                    ->modalSubmitActionLabel('Ya, batalkan')
+                    ->action(function (Sale $record, array $data): void {
+                        $record->cancel($data['reason']);
+
+                        Notification::make()
+                            ->title('Transaksi dibatalkan')
+                            ->body('Stok ' . $record->sale_number . ' sudah dikembalikan.')
+                            ->success()
+                            ->send();
+                    }),
+
                 Action::make('nota')
                     ->label('Cetak Nota')
                     ->icon('heroicon-o-printer')

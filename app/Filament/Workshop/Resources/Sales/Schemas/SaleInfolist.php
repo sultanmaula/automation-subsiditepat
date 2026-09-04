@@ -32,6 +32,10 @@ class SaleInfolist
                                 'ewallet' => 'E-Wallet',
                                 default => $state,
                             }),
+                        TextEntry::make('qris_issuer')
+                            ->label('Provider QRIS')
+                            ->default('-')
+                            ->visible(fn ($record) => $record->payment_method === 'qris'),
                         TextEntry::make('status')
                             ->label('Status')
                             ->badge()

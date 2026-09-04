@@ -54,6 +54,7 @@ Route::middleware('auth')->group(function () {
         abort_unless(auth()->user()?->hasPermission('display'), 403);
 
         $sales = \App\Models\Workshop\Sale::query()
+            ->with('items.product')
             ->where('payment_method', 'qris')
             ->whereIn('payment_status', ['pending', 'settlement'])
             ->whereNotNull('qris_qr_url')
@@ -65,7 +66,7 @@ Route::middleware('auth')->group(function () {
         $sales->each->checkAndUpdateQrisExpired();
 
         return response()->json(
-            $sales->fresh()
+            $sales->fresh(['items.product'])
                 ->where('payment_status', '!=', 'expired')
                 ->map(fn ($sale) => [
                     'id'             => $sale->id,
@@ -73,8 +74,16 @@ Route::middleware('auth')->group(function () {
                     'customer_name'  => $sale->customer_name,
                     'total'          => (float) $sale->total,
                     'payment_status' => $sale->payment_status,
+                    'qris_issuer'    => $sale->qris_issuer,
                     'qr_url'         => $sale->qris_qr_url,
                     'expires_at'     => optional($sale->qris_expires_at)->timestamp,
+                    'items'          => $sale->items->map(fn ($item) => [
+                        'id'         => $item->id,
+                        'name'       => $item->product?->name ?? '—',
+                        'quantity'   => (int) $item->quantity,
+                        'unit_price' => (float) $item->unit_price,
+                        'subtotal'   => (float) $item->subtotal,
+                    ])->values(),
                 ])
                 ->values()
         );
