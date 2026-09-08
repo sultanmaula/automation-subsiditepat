@@ -8,6 +8,7 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 
 class ProductForm
@@ -30,10 +31,13 @@ class ProductForm
                             ->preload(),
                         TextInput::make('barcode')
                             ->label('Barcode')
-                            ->placeholder('Scan dengan barcode scanner USB')
+                            ->placeholder('Scan dengan USB scanner, atau pakai kamera HP')
                             ->unique(ignoreRecord: true)
                             ->maxLength(100)
                             ->autofocus(),
+                        View::make('filament.workshop.components.barcode-scanner')
+                            ->viewData(['statePath' => 'data.barcode'])
+                            ->columnSpanFull(),
                         TextInput::make('unit')
                             ->label('Satuan')
                             ->default('pcs')
